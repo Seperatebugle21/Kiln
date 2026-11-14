@@ -35,11 +35,13 @@ IOS=(
 )
 
 echo "::group::cmark for iOS"
-cmake -S "$CMARK_SRC" -B "$WORK/cmark" "${IOS[@]}" -DCMARK_TESTS=OFF -DCMARK_SHARED=OFF -DCMARK_STATIC=ON
-# Only the static libraries: cmark's test programs call system(), which iOS does not have.
-CMARK_LIBRARIES=($(ninja -C "$WORK/cmark" -t targets all | sed -n 's#^\([^:]*\.a\):.*#\1#p' | sort -u))
-echo "cmark libraries: ${CMARK_LIBRARIES[*]}"
-ninja -C "$WORK/cmark" "${CMARK_LIBRARIES[@]}"
+# BUILD_TESTING=OFF leaves out cmark's test programs, which call system() (unavailable on iOS).
+# Swift finds cmark through the package config that only an install creates.
+cmake -S "$CMARK_SRC" -B "$WORK/cmark" "${IOS[@]}" \
+  -DBUILD_TESTING=OFF -DCMARK_TESTS=OFF -DCMARK_SHARED=OFF -DCMARK_STATIC=ON \
+  -DCMAKE_INSTALL_PREFIX="$WORK/cmark-install"
+ninja -C "$WORK/cmark" install
+ls -R "$WORK/cmark-install/lib/cmake"
 echo "::endgroup::"
 
 echo "::group::Configure Swift for iOS"
@@ -50,7 +52,7 @@ cmake -S "$SWIFT_SRC" -B "$WORK/swift" "${IOS[@]}" \
   -DLLVM_TABLEGEN_EXE="$LLVM_WORK/host/bin/llvm-tblgen" \
   -DSWIFT_NATIVE_LLVM_TOOLS_PATH="$LLVM_WORK/host/bin" \
   -DSWIFT_NATIVE_CLANG_TOOLS_PATH="$(dirname "$(xcrun -f clang)")" \
-  -Dcmark-gfm_DIR="$WORK/cmark/src" \
+  -Dcmark-gfm_DIR="$WORK/cmark-install/lib/cmake" \
   -DSWIFT_HOST_VARIANT=iphoneos \
   -DSWIFT_HOST_VARIANT_SDK=IOS \
   -DSWIFT_HOST_VARIANT_ARCH=arm64 \
@@ -85,7 +87,7 @@ INSTALL="$WORK/install"
 rm -rf "$INSTALL"
 mkdir -p "$INSTALL/lib" "$INSTALL/include"
 cp "$WORK/swift"/lib/*.a "$INSTALL/lib/"
-find "$WORK/cmark" -name '*.a' -exec cp {} "$INSTALL/lib/" \;
+cp "$WORK/cmark-install"/lib/*.a "$INSTALL/lib/"
 for dir in "$SWIFT_SRC/include" "$WORK/swift/include"; do
   rsync -a --include='*/' --include='*.h' --include='*.def' --include='*.inc' --exclude='*' "$dir/" "$INSTALL/include/"
 done
