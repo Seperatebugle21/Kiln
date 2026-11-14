@@ -1,0 +1,105 @@
+name: Toolchain
+
+# Builds Kiln's on-device toolchain. Stage 1: LLVM, Clang and lld for iOS.
+# Takes hours, so it runs on demand and when the toolchain scripts change.
+
+on:
+  workflow_dispatch:
+    inputs:
+      swift_version:
+        description: "Swift version to build, e.g. 6.3 (empty = the version of the runner's Xcode)"
+        required: false
+        default: ""
+  push:
+    branches:
+      - "claude/**"
+    paths:
+      - ".github/workflows/toolchain.yml"
+      - "Toolchain/**"
+
+concurrency:
+  group: toolchain-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  llvm:
+    runs-on: macos-26
+    timeout-minutes: 345
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Pick Swift version
+        id: version
+        run: |
+          xcodebuild -version
+          xcrun swift --version
+          FULL="${{ inputs.swift_version }}"
+          if [ -z "$FULL" ]; then
+            FULL=$(xcrun swift --version 2>&1 | sed -n 's/.*Swift version \([0-9][0-9.]*\).*/\1/p' | head -1)
+          fi
+          VERSION=$(echo "$FULL" | cut -d. -f1-2)
+          # Branch names vary between releases: swift/release/6.3, 6.3.1, 6.4.x, …
+          BRANCH=""
+          for candidate in "$FULL" "$VERSION" "$VERSION.x" "$VERSION.0"; do
+            if git ls-remote --exit-code --heads https://github.com/swiftlang/llvm-project.git "swift/release/$candidate" >/dev/null; then
+              BRANCH="swift/release/$candidate"
+              break
+            fi
+          done
+          if [ -z "$BRANCH" ]; then
+            echo "::error::swiftlang/llvm-project has no release branch for Swift $FULL"
+            exit 1
+          fi
+          echo "Swift $VERSION → llvm-project $BRANCH"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+
+      - name: Fetch llvm-project
+        run: |
+          git clone --depth 1 --branch "${{ steps.version.outputs.branch }}" \
+            https://github.com/swiftlang/llvm-project.git "$RUNNER_TEMP/llvm-project"
+          git -C "$RUNNER_TEMP/llvm-project" log --oneline -1
+
+      - name: Install build tools
+        run: brew install ninja ccache
+
+      - name: Restore compiler cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/Library/Caches/ccache
+          key: ccache-llvm-${{ steps.version.outputs.version }}-${{ github.run_id }}
+          restore-keys: ccache-llvm-${{ steps.version.outputs.version }}-
+
+      - name: Build LLVM, Clang and lld for iOS
+        env:
+          CCACHE_DIR: ~/Library/Caches/ccache
+          CCACHE_MAXSIZE: 6G
+        run: |
+          export CCACHE_DIR="$HOME/Library/Caches/ccache"
+          ccache --zero-stats
+          Toolchain/build-llvm.sh "$RUNNER_TEMP/llvm-project" "$RUNNER_TEMP/llvm-build"
+          ccache --show-stats
+
+      - name: Save compiler cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: ~/Library/Caches/ccache
+          key: ccache-llvm-${{ steps.version.outputs.version }}-${{ github.run_id }}
+
+      - name: Link smoke test
+        run: Toolchain/smoke/link-smoke.sh "$RUNNER_TEMP/llvm-build/install" "$RUNNER_TEMP/KilnToolchainSmoke.dylib"
+
+      - name: Package
+        run: |
+          tar -C "$RUNNER_TEMP/llvm-build/install" -czf "$RUNNER_TEMP/llvm-ios-${{ steps.version.outputs.version }}.tar.gz" .
+          ls -lh "$RUNNER_TEMP"/*.tar.gz
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: llvm-ios-${{ steps.version.outputs.version }}
+          path: ${{ runner.temp }}/llvm-ios-${{ steps.version.outputs.version }}.tar.gz
+          retention-days: 30
