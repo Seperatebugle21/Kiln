@@ -51,6 +51,8 @@ final class ProjectStore {
     private(set) var selectedFile: URL?
     private(set) var buffer = ""
     private(set) var isDirty = false
+    /// Goes up every time a file is opened, so the UI can show the editor even for the same file.
+    private(set) var fileOpenCount = 0
     var errorMessage: String?
 
     private var securityScopedURL: URL?
@@ -232,6 +234,7 @@ final class ProjectStore {
                 throw ProjectError.notText(url.lastPathComponent)
             }
             selectedFile = url
+            fileOpenCount += 1
             buffer = text
             isDirty = false
         } catch {

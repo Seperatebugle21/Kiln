@@ -10,9 +10,11 @@ struct WorkspaceView: View {
     @State private var showsSettings = false
     @State private var runningApp: RunningApp?
     @State private var columnVisibility: NavigationSplitViewVisibility = .automatic
+    /// On iPhone only one column shows at a time; opening a file switches to the editor.
+    @State private var compactColumn: NavigationSplitViewColumn = .detail
 
     var body: some View {
-        NavigationSplitView(columnVisibility: $columnVisibility) {
+        NavigationSplitView(columnVisibility: $columnVisibility, preferredCompactColumn: $compactColumn) {
             FileTreeView()
                 .navigationTitle(projects.name)
                 .toolbar {
@@ -42,6 +44,9 @@ struct WorkspaceView: View {
         }
         .fullScreenCover(item: $runningApp) { app in
             RunnerView(controller: app.controller)
+        }
+        .onChange(of: projects.fileOpenCount) {
+            compactColumn = .detail
         }
         .onChange(of: scenePhase) { _, phase in
             if phase != .active { projects.save() }
