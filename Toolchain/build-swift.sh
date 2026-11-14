@@ -33,7 +33,10 @@ IOS=(
 
 echo "::group::cmark for iOS"
 cmake -S "$CMARK_SRC" -B "$WORK/cmark" "${IOS[@]}" -DCMARK_TESTS=OFF -DCMARK_SHARED=OFF -DCMARK_STATIC=ON
-ninja -C "$WORK/cmark"
+# Only the static libraries: cmark's test programs call system(), which iOS does not have.
+CMARK_LIBRARIES=($(ninja -C "$WORK/cmark" -t targets all | sed -n 's#^\([^:]*\.a\):.*#\1#p' | sort -u))
+echo "cmark libraries: ${CMARK_LIBRARIES[*]}"
+ninja -C "$WORK/cmark" "${CMARK_LIBRARIES[@]}"
 echo "::endgroup::"
 
 echo "::group::Configure Swift for iOS"
@@ -79,7 +82,7 @@ INSTALL="$WORK/install"
 rm -rf "$INSTALL"
 mkdir -p "$INSTALL/lib" "$INSTALL/include"
 cp "$WORK/swift"/lib/*.a "$INSTALL/lib/"
-cp "$WORK/cmark"/src/*.a "$INSTALL/lib/" 2>/dev/null || find "$WORK/cmark" -name '*.a' -exec cp {} "$INSTALL/lib/" \;
+find "$WORK/cmark" -name '*.a' -exec cp {} "$INSTALL/lib/" \;
 for dir in "$SWIFT_SRC/include" "$WORK/swift/include"; do
   rsync -a --include='*/' --include='*.h' --include='*.def' --include='*.inc' --exclude='*' "$dir/" "$INSTALL/include/"
 done
