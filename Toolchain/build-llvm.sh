@@ -64,14 +64,26 @@ cmake -S "$SRC/llvm" -B "$WORK/ios" "${COMMON[@]}" \
   -DCMAKE_INSTALL_PREFIX="$WORK/install"
 echo "::endgroup::"
 
-echo "::group::Build for iOS"
-ninja -C "$WORK/ios" install
+echo "::group::Build static libraries for iOS"
+# Only the static libraries: some tools and shared libraries (such as libIndexStore.dylib) are
+# linked with ELF-only flags when targeting iOS, and Kiln needs none of them.
+# (macOS ships bash 3.2, which has no mapfile; the paths contain no spaces.)
+LIBRARIES=($(ninja -C "$WORK/ios" -t targets all | sed -n 's#^\(lib/lib[^:]*\.a\):.*#\1#p' | sort -u))
+echo "Building ${#LIBRARIES[@]} libraries"
+ninja -C "$WORK/ios" "${LIBRARIES[@]}"
 echo "::endgroup::"
 
-# lld does not always install its headers when its tools are off.
-mkdir -p "$WORK/install/include"
-cp -R "$SRC/lld/include/lld" "$WORK/install/include/"
+echo "::group::Collect"
+INSTALL="$WORK/install"
+rm -rf "$INSTALL"
+mkdir -p "$INSTALL/lib" "$INSTALL/include"
+cp "$WORK/ios"/lib/*.a "$INSTALL/lib/"
+# Headers: the sources, plus the ones generated during the build.
+for dir in "$SRC/llvm/include" "$SRC/clang/include" "$SRC/lld/include" \
+           "$WORK/ios/include" "$WORK/ios/tools/clang/include"; do
+  rsync -a --include='*/' --include='*.h' --include='*.def' --include='*.inc' --include='*.td' --exclude='*' "$dir/" "$INSTALL/include/"
+done
+echo "::endgroup::"
 
-echo "Installed libraries:"
-ls "$WORK/install/lib"/*.a | wc -l
-du -sh "$WORK/install"
+echo "Libraries: $(ls "$INSTALL"/lib/*.a | wc -l)"
+du -sh "$INSTALL"
