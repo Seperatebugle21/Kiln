@@ -1,6 +1,6 @@
 name: Toolchain
 
-# Builds Kiln's on-device toolchain. Stage 1: LLVM, Clang and lld for iOS.
+# Builds Kiln's on-device toolchain: LLVM, Clang and lld (stage 1), then the Swift compiler (stage 2), for iOS.
 # Takes hours, so it runs on demand and when the toolchain scripts change.
 
 on:
@@ -54,6 +54,7 @@ jobs:
           fi
           echo "Swift $VERSION → llvm-project $BRANCH"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "full=$FULL" >> "$GITHUB_OUTPUT"
           echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
 
       - name: Fetch llvm-project
@@ -82,13 +83,6 @@ jobs:
           Toolchain/build-llvm.sh "$RUNNER_TEMP/llvm-project" "$RUNNER_TEMP/llvm-build"
           ccache --show-stats
 
-      - name: Save compiler cache
-        if: always()
-        uses: actions/cache/save@v4
-        with:
-          path: ~/Library/Caches/ccache
-          key: ccache-llvm-${{ steps.version.outputs.version }}-${{ github.run_id }}
-
       - name: Link smoke test
         run: Toolchain/smoke/link-smoke.sh "$RUNNER_TEMP/llvm-build/install" "$RUNNER_TEMP/KilnToolchainSmoke.dylib"
 
@@ -97,9 +91,65 @@ jobs:
           tar -C "$RUNNER_TEMP/llvm-build/install" -czf "$RUNNER_TEMP/llvm-ios-${{ steps.version.outputs.version }}.tar.gz" .
           ls -lh "$RUNNER_TEMP"/*.tar.gz
 
-      - name: Upload
+      - name: Upload LLVM
         uses: actions/upload-artifact@v4
         with:
           name: llvm-ios-${{ steps.version.outputs.version }}
           path: ${{ runner.temp }}/llvm-ios-${{ steps.version.outputs.version }}.tar.gz
           retention-days: 30
+
+      # Stage 2: the Swift compiler.
+
+      - name: Fetch swift and swift-cmark
+        run: |
+          FULL="${{ steps.version.outputs.full }}"
+          VERSION="${{ steps.version.outputs.version }}"
+          for repo in swift swift-cmark; do
+            BRANCH=""
+            for candidate in "$FULL" "$VERSION" "$VERSION.x" "$VERSION.0"; do
+              if git ls-remote --exit-code --heads "https://github.com/swiftlang/$repo.git" "release/$candidate" >/dev/null; then
+                BRANCH="release/$candidate"
+                break
+              fi
+            done
+            test -n "$BRANCH" || { echo "::error::swiftlang/$repo has no release branch for Swift $FULL"; exit 1; }
+            git clone --depth 1 --branch "$BRANCH" "https://github.com/swiftlang/$repo.git" "$RUNNER_TEMP/$repo"
+            echo "$repo: $BRANCH $(git -C "$RUNNER_TEMP/$repo" log --oneline -1)"
+          done
+
+      - name: Build the Swift compiler for iOS
+        run: |
+          export CCACHE_DIR="$HOME/Library/Caches/ccache" CCACHE_MAXSIZE=6G
+          Toolchain/build-swift.sh "$RUNNER_TEMP/swift" "$RUNNER_TEMP/swift-cmark" "$RUNNER_TEMP/llvm-build" "$RUNNER_TEMP/swift-build"
+          ccache --show-stats
+
+      - name: Swift link smoke test
+        run: |
+          Toolchain/smoke/link-swift-smoke.sh "$RUNNER_TEMP/swift-build/install" "$RUNNER_TEMP/llvm-build/install" "$RUNNER_TEMP/KilnSwiftSmoke.dylib"
+
+      - name: Upload link log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: swift-smoke-link-log
+          path: ${{ runner.temp }}/KilnSwiftSmoke.dylib.link.log
+          if-no-files-found: ignore
+
+      - name: Package Swift
+        run: |
+          tar -C "$RUNNER_TEMP/swift-build/install" -czf "$RUNNER_TEMP/swift-ios-${{ steps.version.outputs.version }}.tar.gz" .
+          ls -lh "$RUNNER_TEMP"/swift-ios-*.tar.gz
+
+      - name: Upload Swift
+        uses: actions/upload-artifact@v4
+        with:
+          name: swift-ios-${{ steps.version.outputs.version }}
+          path: ${{ runner.temp }}/swift-ios-${{ steps.version.outputs.version }}.tar.gz
+          retention-days: 30
+
+      - name: Save compiler cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: ~/Library/Caches/ccache
+          key: ccache-llvm-${{ steps.version.outputs.version }}-${{ github.run_id }}
