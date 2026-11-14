@@ -44,15 +44,36 @@ ninja -C "$WORK/cmark" install
 ls -R "$WORK/cmark-install/lib/cmake"
 echo "::endgroup::"
 
+# Swift's CMake decides "Apple or not" with CMAKE_SYSTEM_NAME STREQUAL "Darwin" (system dispatch, uuid in
+# libSystem, …), so configure it as Darwin and get iOS from the SDK and an explicit target, as Apple's
+# own build-script does. Swift adds its host target flags from SWIFT_HOST_VARIANT_SDK=IOS.
+SWIFT_IOS=(
+  -G Ninja
+  -DCMAKE_BUILD_TYPE=Release
+  -DCMAKE_SYSTEM_NAME=Darwin
+  -DCMAKE_OSX_SYSROOT="$IOS_SDK"
+  -DCMAKE_OSX_ARCHITECTURES=arm64
+  -DCMAKE_C_COMPILER_TARGET="arm64-apple-ios$DEPLOYMENT_TARGET"
+  -DCMAKE_CXX_COMPILER_TARGET="arm64-apple-ios$DEPLOYMENT_TARGET"
+  -DCMAKE_ASM_COMPILER_TARGET="arm64-apple-ios$DEPLOYMENT_TARGET"
+  -DCMAKE_Swift_COMPILER_TARGET="arm64-apple-ios$DEPLOYMENT_TARGET"
+  -DCMAKE_MACOSX_BUNDLE=OFF
+  "${LAUNCHER[@]}"
+)
+
 echo "::group::Configure Swift for iOS"
-cmake -S "$SWIFT_SRC" -B "$WORK/swift" "${IOS[@]}" \
+cmake -S "$SWIFT_SRC" -B "$WORK/swift" "${SWIFT_IOS[@]}" \
   -DLLVM_DIR="$LLVM_WORK/ios/lib/cmake/llvm" \
   -DClang_DIR="$LLVM_WORK/ios/lib/cmake/clang" \
   -DLLVM_TABLEGEN="$LLVM_WORK/host/bin/llvm-tblgen" \
   -DLLVM_TABLEGEN_EXE="$LLVM_WORK/host/bin/llvm-tblgen" \
   -DSWIFT_NATIVE_LLVM_TOOLS_PATH="$LLVM_WORK/host/bin" \
   -DSWIFT_NATIVE_CLANG_TOOLS_PATH="$(dirname "$(xcrun -f clang)")" \
+  -DSWIFT_PATH_TO_CMARK_SOURCE="$CMARK_SRC" \
+  -DSWIFT_PATH_TO_CMARK_BUILD="$WORK/cmark" \
+  -DSWIFT_CMARK_LIBRARY_DIR="$WORK/cmark-install/lib" \
   -Dcmark-gfm_DIR="$WORK/cmark-install/lib/cmake" \
+  -DSWIFT_ENABLE_DISPATCH=OFF \
   -DSWIFT_HOST_VARIANT=iphoneos \
   -DSWIFT_HOST_VARIANT_SDK=IOS \
   -DSWIFT_HOST_VARIANT_ARCH=arm64 \
