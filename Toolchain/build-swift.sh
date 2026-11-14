@@ -28,6 +28,9 @@ IOS=(
   -DCMAKE_OSX_ARCHITECTURES=arm64
   -DCMAKE_OSX_DEPLOYMENT_TARGET="$DEPLOYMENT_TARGET"
   -DCMAKE_MACOSX_BUNDLE=OFF
+  # CMake checks Xcode's swiftc even when no Swift code is built; without a target it
+  # compiles for macOS against the iOS SDK and fails.
+  -DCMAKE_Swift_COMPILER_TARGET="arm64-apple-ios$DEPLOYMENT_TARGET"
   "${LAUNCHER[@]}"
 )
 
