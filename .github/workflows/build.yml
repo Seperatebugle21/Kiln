@@ -1,0 +1,74 @@
+name: Build Kiln
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - "claude/**"
+  pull_request:
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: macos-26
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Show Xcode version
+        run: |
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Resolve packages
+        run: xcodebuild -resolvePackageDependencies -project Kiln.xcodeproj -scheme Kiln
+
+      - name: Build (unsigned)
+        run: |
+          mkdir -p build
+          xcodebuild archive \
+            -project Kiln.xcodeproj \
+            -scheme Kiln \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath build/Kiln.xcarchive \
+            -skipMacroValidation \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            | tee build/xcodebuild.log | grep -E "error:|warning:|BUILD|ARCHIVE" || true
+          test -d build/Kiln.xcarchive/Products/Applications/Kiln.app
+
+      - name: Package IPA
+        run: |
+          mkdir -p build/Payload
+          cp -R build/Kiln.xcarchive/Products/Applications/Kiln.app build/Payload/
+          (cd build && zip -qry Kiln.ipa Payload)
+          ls -lh build/Kiln.ipa
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: Kiln-unsigned-ipa
+          path: build/Kiln.ipa
+          retention-days: 14
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xcodebuild-log
+          path: build/xcodebuild.log
+          if-no-files-found: ignore
