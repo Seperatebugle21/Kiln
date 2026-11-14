@@ -74,6 +74,8 @@ cmake -S "$SWIFT_SRC" -B "$WORK/swift" "${SWIFT_IOS[@]}" \
   -DSWIFT_CMARK_LIBRARY_DIR="$WORK/cmark-install/lib" \
   -Dcmark-gfm_DIR="$WORK/cmark-install/lib/cmake" \
   -DSWIFT_ENABLE_DISPATCH=OFF \
+  -DCMAKE_PROJECT_INCLUDE="$(cd "$(dirname "$0")" && pwd)/cmake/swift-ios-overrides.cmake" \
+  -DCMAKE_DISABLE_FIND_PACKAGE_LibEdit=ON \
   -DSWIFT_HOST_VARIANT=iphoneos \
   -DSWIFT_HOST_VARIANT_SDK=IOS \
   -DSWIFT_HOST_VARIANT_ARCH=arm64 \
