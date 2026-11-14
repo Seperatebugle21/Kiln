@@ -5,6 +5,7 @@ struct KilnApp: App {
     @State private var projects: ProjectStore
     @State private var builds: BuildCoordinator
     @State private var assistant: AssistantSession
+    @State private var sync = SyncController()
 
     init() {
         let projects = ProjectStore()
@@ -20,6 +21,7 @@ struct KilnApp: App {
                 .environment(projects)
                 .environment(builds)
                 .environment(assistant)
+                .environment(sync)
                 .task { projects.restoreLastProject() }
         }
     }
@@ -27,6 +29,7 @@ struct KilnApp: App {
 
 struct RootView: View {
     @Environment(ProjectStore.self) private var projects
+    @Environment(SyncController.self) private var sync
 
     var body: some View {
         Group {
@@ -35,6 +38,20 @@ struct RootView: View {
             } else {
                 WelcomeView()
             }
+        }
+        .task(id: projects.root) {
+            sync.refresh(for: projects.root)
+        }
+        .alert(
+            "GitHub",
+            isPresented: Binding(
+                get: { sync.errorMessage != nil || sync.message != nil },
+                set: { if !$0 { sync.errorMessage = nil; sync.message = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(sync.errorMessage ?? sync.message ?? "")
         }
         .alert(
             "Something went wrong",

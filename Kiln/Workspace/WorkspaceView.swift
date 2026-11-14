@@ -3,11 +3,13 @@ import SwiftUI
 struct WorkspaceView: View {
     @Environment(ProjectStore.self) private var projects
     @Environment(BuildCoordinator.self) private var builds
+    @Environment(SyncController.self) private var sync
     @Environment(\.scenePhase) private var scenePhase
 
     @State private var showsAssistant = false
     @State private var showsBuildLog = false
     @State private var showsSettings = false
+    @State private var showsCommitSheet = false
     @State private var runningApp: RunningApp?
     @State private var columnVisibility: NavigationSplitViewVisibility = .automatic
     /// On iPhone only one column shows at a time; opening a file switches to the editor.
@@ -26,6 +28,11 @@ struct WorkspaceView: View {
                             Label("Project", systemImage: "ellipsis.circle")
                         }
                     }
+                    if sync.state != nil {
+                        ToolbarItem(placement: .topBarTrailing) {
+                            SyncMenu(showsCommitSheet: $showsCommitSheet)
+                        }
+                    }
                 }
         } detail: {
             EditorPane()
@@ -41,6 +48,9 @@ struct WorkspaceView: View {
         }
         .sheet(isPresented: $showsSettings) {
             SettingsView()
+        }
+        .sheet(isPresented: $showsCommitSheet) {
+            CommitSheet()
         }
         .fullScreenCover(item: $runningApp) { app in
             RunnerView(controller: app.controller)

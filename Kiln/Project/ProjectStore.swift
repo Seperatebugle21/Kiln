@@ -266,6 +266,20 @@ final class ProjectStore {
         }
     }
 
+    /// Re-reads the tree and the open file after something else (such as a pull) changed the files.
+    func reloadFromDisk() {
+        reloadTree()
+        guard let selectedFile else { return }
+        if let data = try? Data(contentsOf: selectedFile), let text = String(data: data, encoding: .utf8) {
+            buffer = text
+            isDirty = false
+        } else {
+            self.selectedFile = nil
+            buffer = ""
+            isDirty = false
+        }
+    }
+
     func updateBuffer(_ text: String) {
         guard text != buffer else { return }
         buffer = text

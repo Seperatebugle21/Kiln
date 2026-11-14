@@ -6,6 +6,7 @@ struct WelcomeView: View {
     @State private var picker: PickerRequest?
     @State private var xcodeProjectNeedingFolder: URL?
     @State private var showsSettings = false
+    @State private var showsClone = false
     @State private var localProjects: [URL] = []
     @State private var pendingDeletion: URL?
 
@@ -32,6 +33,11 @@ struct WelcomeView: View {
                         picker = .project
                     } label: {
                         Label("Open Project…", systemImage: "folder")
+                    }
+                    Button {
+                        showsClone = true
+                    } label: {
+                        Label("Clone from GitHub…", systemImage: "arrow.down.circle")
                     }
                     Button {
                         projects.createSampleProject()
@@ -78,6 +84,9 @@ struct WelcomeView: View {
             .onAppear { localProjects = projects.localProjects() }
             .sheet(isPresented: $showsSettings) {
                 SettingsView()
+            }
+            .sheet(isPresented: $showsClone) {
+                CloneSheet()
             }
             .sheet(item: $picker) { request in
                 DocumentPicker(contentTypes: request.contentTypes, directoryURL: request.directoryURL) { url in
