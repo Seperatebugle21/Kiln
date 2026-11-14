@@ -51,6 +51,15 @@ jobs:
             | tee build/xcodebuild.log | grep -E "error:|warning:|BUILD|ARCHIVE" || true
           test -d build/Kiln.xcarchive/Products/Applications/Kiln.app
 
+      - name: Check Info.plist
+        run: |
+          PLIST=build/Kiln.xcarchive/Products/Applications/Kiln.app/Info.plist
+          plutil -p "$PLIST"
+          # Both are needed for Kiln's projects to show up in the Files app.
+          for key in UIFileSharingEnabled LSSupportsOpeningDocumentsInPlace; do
+            test "$(/usr/libexec/PlistBuddy -c "Print :$key" "$PLIST")" = "true" || { echo "::error::$key is not true"; exit 1; }
+          done
+
       - name: Package IPA
         run: |
           mkdir -p build/Payload

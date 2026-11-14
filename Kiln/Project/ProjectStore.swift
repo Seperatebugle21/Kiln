@@ -113,8 +113,7 @@ final class ProjectStore {
     /// Creates a small SwiftUI app in the app's Documents folder and opens it.
     func createSampleProject() {
         do {
-            let documents = try FileManager.default.url(for: .documentDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
-            let projectsFolder = documents.appendingPathComponent("Projects", isDirectory: true)
+            let projectsFolder = try Self.localProjectsFolder()
             var folder = projectsFolder.appendingPathComponent("HelloKiln", isDirectory: true)
             var index = 2
             while FileManager.default.fileExists(atPath: folder.path) {
@@ -129,6 +128,31 @@ final class ProjectStore {
         } catch {
             errorMessage = error.localizedDescription
         }
+    }
+
+    /// Documents/Projects, which the Files app shows under On My iPhone › Kiln.
+    static func localProjectsFolder() throws -> URL {
+        let documents = try FileManager.default.url(for: .documentDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
+        let folder = documents.appendingPathComponent("Projects", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        return folder
+    }
+
+    /// Projects stored inside Kiln, newest first.
+    func localProjects() -> [URL] {
+        guard let folder = try? Self.localProjectsFolder(),
+              let urls = try? FileManager.default.contentsOfDirectory(
+                at: folder,
+                includingPropertiesForKeys: [.isDirectoryKey, .contentModificationDateKey],
+                options: [.skipsHiddenFiles]
+              )
+        else { return [] }
+        func modified(_ url: URL) -> Date {
+            (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+        }
+        return urls
+            .filter { (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true }
+            .sorted { modified($0) > modified($1) }
     }
 
     // MARK: File tree
