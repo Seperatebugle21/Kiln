@@ -3,7 +3,6 @@ import UniformTypeIdentifiers
 
 struct WelcomeView: View {
     @Environment(ProjectStore.self) private var projects
-    @State private var picker: PickerRequest?
     @State private var xcodeProjectNeedingFolder: URL?
     @State private var showsSettings = false
     @State private var showsClone = false
@@ -30,7 +29,9 @@ struct WelcomeView: View {
 
                 Section {
                     Button {
-                        picker = .project
+                        DocumentPicker.present(contentTypes: DocumentPicker.projectTypes) { url in
+                            handlePickedProject(url)
+                        }
                     } label: {
                         Label("Open Project…", systemImage: "folder")
                     }
@@ -88,12 +89,6 @@ struct WelcomeView: View {
             .sheet(isPresented: $showsClone) {
                 CloneSheet()
             }
-            .sheet(item: $picker) { request in
-                DocumentPicker(contentTypes: request.contentTypes, directoryURL: request.directoryURL) { url in
-                    handlePick(url, for: request)
-                }
-                .ignoresSafeArea()
-            }
             .alert(
                 "Choose the Project Folder",
                 isPresented: Binding(
@@ -103,7 +98,13 @@ struct WelcomeView: View {
             ) {
                 Button("Choose Folder") {
                     if let project = xcodeProjectNeedingFolder {
-                        picker = .folderContaining(project)
+                        // Start in the folder that holds the .xcodeproj, so one tap on Open is enough.
+                        // Wait for the alert to go away, or there is nothing to present from.
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                            DocumentPicker.present(contentTypes: [.folder], directoryURL: project.deletingLastPathComponent()) { url in
+                                projects.open(url)
+                            }
+                        }
                     }
                 }
                 Button("Cancel", role: .cancel) {}
@@ -126,43 +127,15 @@ struct WelcomeView: View {
         }
     }
 
-    private func handlePick(_ url: URL, for request: PickerRequest) {
-        picker = nil
-        switch request {
-        case .project where ["xcodeproj", "xcworkspace"].contains(url.pathExtension):
+    private func handlePickedProject(_ url: URL) {
+        if ["xcodeproj", "xcworkspace"].contains(url.pathExtension) {
             // Access covers only the picked item, and the sources live next to the .xcodeproj.
-            // Present the folder picker after this sheet has gone away.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            // Ask for the surrounding folder once the picker has gone away.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
                 xcodeProjectNeedingFolder = url
             }
-        default:
+        } else {
             projects.open(url)
-        }
-    }
-}
-
-private enum PickerRequest: Identifiable {
-    case project
-    case folderContaining(URL)
-
-    var id: String {
-        switch self {
-        case .project: return "project"
-        case .folderContaining(let url): return "folder:" + url.path
-        }
-    }
-
-    var contentTypes: [UTType] {
-        switch self {
-        case .project: return DocumentPicker.projectTypes
-        case .folderContaining: return [.folder]
-        }
-    }
-
-    var directoryURL: URL? {
-        switch self {
-        case .project: return nil
-        case .folderContaining(let url): return url.deletingLastPathComponent()
         }
     }
 }
