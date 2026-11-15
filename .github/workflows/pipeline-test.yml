@@ -23,6 +23,15 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: List the SDK's external macros
+        run: |
+          SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
+          grep -rhoE '#externalMacro\(module: *"[A-Za-z_]+", *type: *"[A-Za-z_]+"\)' \
+            "$SDK/System/Library/Frameworks" "$SDK/usr/lib/swift" --include='*.swiftinterface' | sort | uniq -c | sort -rn
+          echo "--- macro declarations in SwiftUI / DeveloperToolsSupport"
+          grep -rhE -B2 '#externalMacro\(module: *"(SwiftUIMacros|PreviewsMacros)"' \
+            "$SDK/System/Library/Frameworks" --include='arm64e-apple-ios.swiftinterface' | grep -E 'macro |externalMacro' | sort -u | head -40
+
       - name: Install the swift.org toolchain
         run: |
           xcrun swift --version
