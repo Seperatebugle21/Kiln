@@ -15,7 +15,9 @@ on:
       - "claude/**"
     paths:
       - ".github/workflows/toolchain.yml"
-      - "Toolchain/**"
+      - "Toolchain/*.sh"
+      - "Toolchain/cmake/**"
+      - "Toolchain/smoke/**"
 
 concurrency:
   group: toolchain-${{ github.ref }}
