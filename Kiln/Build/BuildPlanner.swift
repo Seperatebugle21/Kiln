@@ -61,6 +61,13 @@ enum BuildPlanner {
             directDependencies = project.packages
             appRequirements = project.products.map { .byName($0) }
             let packageFolders = findPackageFolders(in: root)
+            if directDependencies.isEmpty {
+                // A plain folder: every Swift package inside it is a dependency of the app.
+                directDependencies = packageFolders.map { folder in
+                    let relative = String(folder.path.dropFirst(root.standardizedFileURL.path.count + 1))
+                    return PackageManifest.Dependency(location: .path(relative), requirement: .none, name: nil)
+                }
+            }
             plan.appSources = files(in: [root], extensions: swiftExtensions, excluding: packageFolders, skipTests: true)
             if plan.bridgingHeader != nil {
                 plan.appCSources = files(in: [root], extensions: clangExtensions, excluding: packageFolders, skipTests: true)

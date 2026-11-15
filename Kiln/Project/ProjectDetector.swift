@@ -41,11 +41,72 @@ enum SampleProject {
 
     """
 
+    /// A local Swift package with a C target and a Swift wrapper, like CLame in Echo.
+    static let packageFiles: [String: String] = [
+        "Packages/Greeting/Package.swift": """
+        // swift-tools-version: 5.9
+        import PackageDescription
+
+        let package = Package(
+            name: "Greeting",
+            products: [
+                .library(name: "Greeting", targets: ["Greeting"]),
+            ],
+            targets: [
+                .target(name: "CGreeting"),
+                .target(name: "Greeting", dependencies: ["CGreeting"]),
+            ]
+        )
+
+        """,
+        "Packages/Greeting/Sources/CGreeting/include/CGreeting.h": """
+        #ifndef CGREETING_H
+        #define CGREETING_H
+
+        /// Written in C and compiled on the iPhone by Kiln.
+        const char *greeting_text(void);
+        int greeting_answer(void);
+
+        #endif
+
+        """,
+        "Packages/Greeting/Sources/CGreeting/greeting.c": """
+        #include "CGreeting.h"
+
+        const char *greeting_text(void) {
+            return "Hello from C";
+        }
+
+        int greeting_answer(void) {
+            return 6 * 7;
+        }
+
+        """,
+        "Packages/Greeting/Sources/Greeting/Greeting.swift": """
+        import CGreeting
+
+        public enum Greeting {
+            /// Calls into the C target.
+            public static var text: String {
+                "\\(String(cString: greeting_text())) (\\(greeting_answer()))"
+            }
+        }
+
+        """,
+    ]
+
     static let contentViewSource = """
+    import Greeting
+    import Observation
     import SwiftUI
 
+    @Observable
+    final class Counter {
+        var count = 0
+    }
+
     struct ContentView: View {
-        @State private var count = 0
+        @State private var counter = Counter()
 
         var body: some View {
             VStack(spacing: 24) {
@@ -54,15 +115,21 @@ enum SampleProject {
                     .foregroundStyle(.orange)
                 Text("Hello from Kiln")
                     .font(.largeTitle.bold())
-                Text("Tapped \\(count) times")
+                Text(Greeting.text)
+                    .font(.headline)
+                Text("Tapped \\(counter.count) times")
                     .foregroundStyle(.secondary)
                 Button("Tap me") {
-                    count += 1
+                    counter.count += 1
                 }
                 .buttonStyle(.borderedProminent)
             }
             .padding()
         }
+    }
+
+    #Preview {
+        ContentView()
     }
 
     """

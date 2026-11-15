@@ -124,6 +124,11 @@ final class ProjectStore {
             try FileManager.default.createDirectory(at: sources, withIntermediateDirectories: true)
             try SampleProject.appSource.write(to: sources.appendingPathComponent("HelloKilnApp.swift"), atomically: true, encoding: .utf8)
             try SampleProject.contentViewSource.write(to: sources.appendingPathComponent("ContentView.swift"), atomically: true, encoding: .utf8)
+            for (path, contents) in SampleProject.packageFiles {
+                let url = folder.appendingPathComponent(path)
+                try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try contents.write(to: url, atomically: true, encoding: .utf8)
+            }
             open(folder)
         } catch {
             errorMessage = error.localizedDescription
