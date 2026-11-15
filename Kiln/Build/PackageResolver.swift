@@ -36,6 +36,8 @@ final class PackageResolver: @unchecked Sendable {
     }
 
     private let pins: [String: String]
+    /// Set when GitHub's tag list could not be read for the current lookup.
+    private var tagLookupFailed = false
     /// Versions chosen from tags in earlier builds of this project, so later builds need no
     /// GitHub API calls (which are rate-limited without a token) and stay on the same versions.
     private var remembered: [String: String]
@@ -116,7 +118,10 @@ final class PackageResolver: @unchecked Sendable {
                 guard let version = Self.version(candidate) else { return false }
                 return version.first == minimum.first && !version.lexicographicallyPrecedes(minimum)
             }
-            guard let tag else { throw Failure.noMatchingVersion(repo, "from: \(lower)") }
+            guard let tag else {
+                if tagLookupFailed, let fallback = try await existingTag(owner: owner, repo: repo, version: lower) { return fallback }
+                throw Failure.noMatchingVersion(repo, "from: \(lower)")
+            }
             return tag
         case .upToNextMinor(let lower):
             guard let minimum = Self.version(lower) else { throw Failure.noMatchingVersion(repo, "upToNextMinor: \(lower)") }
@@ -124,7 +129,10 @@ final class PackageResolver: @unchecked Sendable {
                 guard let version = Self.version(candidate) else { return false }
                 return version[0] == minimum[0] && version[1] == minimum[1] && !version.lexicographicallyPrecedes(minimum)
             }
-            guard let tag else { throw Failure.noMatchingVersion(repo, "upToNextMinor: \(lower)") }
+            guard let tag else {
+                if tagLookupFailed, let fallback = try await existingTag(owner: owner, repo: repo, version: lower) { return fallback }
+                throw Failure.noMatchingVersion(repo, "upToNextMinor: \(lower)")
+            }
             return tag
         case .range(let lower, let upper, let inclusive):
             let description = "\(lower)\(inclusive ? "..." : "..<")\(upper)"
@@ -136,24 +144,48 @@ final class PackageResolver: @unchecked Sendable {
                 let belowMaximum = inclusive ? !maximum.lexicographicallyPrecedes(version) : version.lexicographicallyPrecedes(maximum)
                 return !version.lexicographicallyPrecedes(minimum) && belowMaximum
             }
-            guard let tag else { throw Failure.noMatchingVersion(repo, description) }
+            guard let tag else {
+                if tagLookupFailed, let fallback = try await existingTag(owner: owner, repo: repo, version: lower) { return fallback }
+                throw Failure.noMatchingVersion(repo, description)
+            }
             return tag
         case .none:
             return "HEAD"
         }
     }
 
+    /// "1.3.0" or "v1.3.0", whichever tag exists, checked without the rate-limited API.
+    private func existingTag(owner: String, repo: String, version: String) async throws -> String? {
+        for candidate in [version, "v" + version] {
+            var request = URLRequest(url: URL(string: "https://codeload.github.com/\(owner)/\(repo)/tar.gz/\(candidate)")!)
+            request.httpMethod = "HEAD"
+            let (_, response) = try await URLSession.shared.data(for: request)
+            if (response as? HTTPURLResponse)?.statusCode == 200 { return candidate }
+        }
+        return nil
+    }
+
     /// The highest tag accepted by `matches`.
     private func tag(owner: String, repo: String, where matches: (String) -> Bool) async throws -> String? {
+        tagLookupFailed = false
         var tags: [String] = []
         for page in 1...5 {
             var request = URLRequest(url: URL(string: "https://api.github.com/repos/\(owner)/\(repo)/tags?per_page=100&page=\(page)")!)
             request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
             if let token, !token.isEmpty { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
             let (data, response) = try await URLSession.shared.data(for: request)
-            guard (response as? HTTPURLResponse)?.statusCode == 200,
+            let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+            guard status == 200,
                   let list = try JSONSerialization.jsonObject(with: data) as? [[String: Any]]
-            else { break }
+            else {
+                if page == 1 {
+                    // Rate-limited (60 requests an hour without a token) or offline: the caller falls
+                    // back to the lowest allowed version.
+                    log("\(repo): GitHub did not list its versions (HTTP \(status)); using the minimum version. A GitHub token in Settings avoids this.")
+                    tagLookupFailed = true
+                }
+                break
+            }
             tags += list.compactMap { $0["name"] as? String }
             if list.count < 100 { break }
         }
