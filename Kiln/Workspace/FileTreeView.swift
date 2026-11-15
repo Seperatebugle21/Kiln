@@ -62,6 +62,9 @@ struct FileTreeView: View {
         }
         .buttonStyle(.plain)
         .contextMenu {
+            if ProjectStore.isOpenableProject(node.url) || node.url.pathExtension.lowercased() == "zip" {
+                Button("Open as Project", systemImage: "arrow.up.forward.app") { projects.open(node.url) }
+            }
             if node.isDirectory {
                 Button("New File Here", systemImage: "doc.badge.plus") { askForNewFile(in: node.url) }
             }

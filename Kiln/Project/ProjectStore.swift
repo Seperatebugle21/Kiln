@@ -15,6 +15,11 @@ struct FileNode: Identifiable, Hashable {
     var children: [FileNode]?
 
     var systemImage: String {
+        switch url.pathExtension.lowercased() {
+        case "swiftpm": return "shippingbox"
+        case "zip": return "doc.zipper"
+        default: break
+        }
         if isDirectory { return "folder" }
         switch url.pathExtension.lowercased() {
         case "swift": return "swift"
@@ -71,8 +76,22 @@ final class ProjectStore {
     // MARK: Opening and closing
 
     func open(_ url: URL) {
+        // A zipped project (a .swiftpm sent as one file): unpack it into Kiln's Projects folder first.
+        if !Self.isDirectory(url) {
+            importArchive(url)
+            return
+        }
+        // Opening a folder inside the current project (a .swiftpm in a repo) keeps the parent's access.
+        var inheritedScope: URL?
+        if let scoped = securityScopedURL,
+           url.standardizedFileURL.path.hasPrefix(scoped.standardizedFileURL.path + "/") {
+            inheritedScope = scoped
+            securityScopedURL = nil
+        }
         close(forget: false)
-        if url.startAccessingSecurityScopedResource() {
+        if let inheritedScope {
+            securityScopedURL = inheritedScope
+        } else if url.startAccessingSecurityScopedResource() {
             securityScopedURL = url
         }
         root = url
@@ -84,6 +103,37 @@ final class ProjectStore {
         if let main = ProjectDetector.preferredStartFile(in: swiftFiles()) {
             select(main)
         }
+    }
+
+    /// Unpacks a zipped project into Kiln's Projects folder and opens it.
+    func importArchive(_ url: URL) {
+        let accessing = url.startAccessingSecurityScopedResource()
+        defer { if accessing { url.stopAccessingSecurityScopedResource() } }
+        guard ZipArchive.isZip(url) else {
+            errorMessage = "\(url.lastPathComponent) is not a folder or a zip archive, so Kiln cannot open it as a project."
+            return
+        }
+        do {
+            let folder = try ZipArchive.importProject(url, into: Self.localProjectsFolder())
+            open(folder)
+        } catch {
+            errorMessage = "Could not unpack \(url.lastPathComponent): \(error.localizedDescription)"
+        }
+    }
+
+    /// True for folders, including packages such as .swiftpm that iOS may report as a file.
+    static func isDirectory(_ url: URL) -> Bool {
+        if let value = try? url.resourceValues(forKeys: [.isDirectoryKey, .isPackageKey]),
+           value.isDirectory == true || value.isPackage == true {
+            return true
+        }
+        var isDirectory: ObjCBool = false
+        return FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory) && isDirectory.boolValue
+    }
+
+    /// Bundles that are themselves a project and can be opened on their own.
+    static func isOpenableProject(_ url: URL) -> Bool {
+        url.pathExtension.lowercased() == "swiftpm"
     }
 
     func restoreLastProject() {
@@ -178,7 +228,7 @@ final class ProjectStore {
 
         let nodes: [FileNode] = urls.compactMap { url in
             let name = url.lastPathComponent
-            let isDirectory = (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
+            let isDirectory = Self.isDirectory(url)
             if isDirectory && ignoredDirectoryNames.contains(name) { return nil }
             if isDirectory && !opaqueExtensions.contains(url.pathExtension) {
                 return FileNode(url: url, name: name, isDirectory: true, children: children(of: url, depth: depth + 1))
@@ -217,7 +267,7 @@ final class ProjectStore {
 
         var files: [URL] = []
         for case let url as URL in enumerator {
-            let isDirectory = (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
+            let isDirectory = Self.isDirectory(url)
             if isDirectory {
                 if ignoredDirectoryNames.contains(url.lastPathComponent) || opaqueExtensions.contains(url.pathExtension) {
                     enumerator.skipDescendants()
@@ -256,10 +306,16 @@ final class ProjectStore {
     // MARK: Editor
 
     func select(_ url: URL) {
+        guard !Self.isDirectory(url) else { return }
         save()
         do {
             let data = try Data(contentsOf: url)
             guard let text = String(data: data, encoding: .utf8) else {
+                // A zipped .swiftpm or project inside the folder: unpack and open it.
+                if ZipArchive.isZip(url), ["swiftpm", "zip", "xcodeproj"].contains(url.pathExtension.lowercased()) {
+                    importArchive(url)
+                    return
+                }
                 throw ProjectError.notText(url.lastPathComponent)
             }
             selectedFile = url

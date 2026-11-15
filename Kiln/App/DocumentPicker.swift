@@ -10,7 +10,7 @@ import UniformTypeIdentifiers
 enum DocumentPicker {
     /// Project folders, Swift packages (.swiftpm) and Xcode projects (.xcodeproj).
     static let projectTypes: [UTType] = {
-        var types: [UTType] = [.folder, .package]
+        var types: [UTType] = [.folder, .package, .zip]
         for fileExtension in ["swiftpm", "xcodeproj", "xcworkspace"] {
             if let type = UTType(filenameExtension: fileExtension) { types.append(type) }
         }

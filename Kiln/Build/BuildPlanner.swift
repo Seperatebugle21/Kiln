@@ -32,9 +32,25 @@ struct BuildPlan: Sendable {
 enum BuildPlanner {
     static let swiftExtensions: Set<String> = ["swift"]
     static let clangExtensions: Set<String> = ["c", "m", "mm", "cc", "cpp", "cxx"]
+    /// A folder that only wraps one Swift Playgrounds app (a repo with `MyApp.swiftpm/` in it)
+    /// builds that app.
+    static func packageRoot(in folder: URL) -> URL {
+        let fileManager = FileManager.default
+        func has(_ name: String) -> Bool { fileManager.fileExists(atPath: folder.appendingPathComponent(name).path) }
+        let names = (try? fileManager.contentsOfDirectory(atPath: folder.path)) ?? []
+        if has("Package.swift") || has("project.yml") || names.contains(where: { $0.hasSuffix(".xcodeproj") }) {
+            return folder
+        }
+        let playgrounds = names.filter { $0.hasSuffix(".swiftpm") }
+            .map { folder.appendingPathComponent($0, isDirectory: true) }
+            .filter { fileManager.fileExists(atPath: $0.appendingPathComponent("Package.swift").path) }
+        return playgrounds.count == 1 ? playgrounds[0] : folder
+    }
+
     private static let skippedFolders: Set<String> = [".build", "build", "DerivedData", "Pods", "node_modules", "xcuserdata", ".git", ".kiln"]
 
-    static func plan(root: URL, resolver: PackageResolver) async throws -> BuildPlan {
+    static func plan(root folder: URL, resolver: PackageResolver) async throws -> BuildPlan {
+        let root = packageRoot(in: folder)
         var plan = BuildPlan()
         var directDependencies: [PackageManifest.Dependency] = []
         var dependencyBase = root

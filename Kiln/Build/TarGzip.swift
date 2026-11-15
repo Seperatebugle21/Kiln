@@ -50,7 +50,7 @@ enum TarGzip {
         return try inflate(deflated)
     }
 
-    private static func inflate(_ input: [UInt8]) throws -> Data {
+    static func inflate(_ input: [UInt8]) throws -> Data {
         var output = Data()
         let bufferSize = 1 << 16
         let destination = UnsafeMutablePointer<UInt8>.allocate(capacity: bufferSize)
