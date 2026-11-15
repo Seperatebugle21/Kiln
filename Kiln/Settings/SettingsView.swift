@@ -90,6 +90,17 @@ struct SettingsView: View {
                 } footer: {
                     Text("Kiln signs the apps it builds with this certificate, so iOS loads them without JIT. Use the same certificate (developer or enterprise) that Kiln itself is signed with; the Team IDs must match. Stored in the Keychain.")
                 }
+                Section {
+                    NavigationLink {
+                        BuildLogsView()
+                    } label: {
+                        Label("Build Logs", systemImage: "doc.text.magnifyingglass")
+                    }
+                } header: {
+                    Text("Diagnostics")
+                } footer: {
+                    Text("Logs of recent builds, also of builds that crashed Kiln.")
+                }
             }
             .onAppear(perform: loadSigningSummary)
             .alert(

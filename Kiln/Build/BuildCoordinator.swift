@@ -18,6 +18,13 @@ final class BuildCoordinator {
 
     var errors: [BuildDiagnostic] { diagnostics.filter { $0.severity == .error } }
 
+    /// This build's file in Documents/Build Logs.
+    private var logFile: URL?
+
+    init() {
+        recoverCrashedLog()
+    }
+
     @discardableResult
     func build(_ project: ProjectStore) async -> Bool {
         guard phase != .building, project.root != nil else { return false }
@@ -28,11 +35,15 @@ final class BuildCoordinator {
         defer {
             UIApplication.shared.isIdleTimerDisabled = false
             UserDefaults.standard.removeObject(forKey: Self.stepKey)
+            UserDefaults.standard.removeObject(forKey: Self.logFileKey)
         }
         log = []
         diagnostics = []
         product = nil
         reportPreviousCrash()
+        logFile = BuildLogStore.start(project: project.name)
+        UserDefaults.standard.set(logFile?.path, forKey: Self.logFileKey)
+        for line in log { BuildLogStore.append(line, to: logFile) }
         append("Building \(project.name) with \(backend.name)")
 
         // Work out the modules: package dependencies (downloaded if needed), then the app.
@@ -98,6 +109,7 @@ final class BuildCoordinator {
             product = result
             phase = .succeeded
             append("Build succeeded.")
+            BuildLogStore.finish(logFile, result: .succeeded)
             return true
         } catch BuildError.diagnostics(let compilerDiagnostics) {
             diagnostics = compilerDiagnostics
@@ -119,6 +131,7 @@ final class BuildCoordinator {
 
     private func append(_ line: String) {
         log.append(line)
+        BuildLogStore.append(line, to: logFile)
         if phase == .building {
             UserDefaults.standard.set(line, forKey: Self.stepKey)
         }
@@ -126,6 +139,22 @@ final class BuildCoordinator {
 
     /// The last log line of a build in progress; still set at the next launch if Kiln crashed.
     private static let stepKey = "kiln.buildStepInProgress"
+    private static let logFileKey = "kiln.buildLogFileInProgress"
+
+    /// At launch: completes the log file of a build that crashed Kiln with the compiler's last output.
+    private func recoverCrashedLog() {
+        guard let path = UserDefaults.standard.string(forKey: Self.logFileKey) else { return }
+        UserDefaults.standard.removeObject(forKey: Self.logFileKey)
+        let file = URL(fileURLWithPath: path)
+        guard FileManager.default.fileExists(atPath: path) else { return }
+        BuildLogStore.append("", to: file)
+        BuildLogStore.append("⚠️ Kiln stopped during this build (a crash).", to: file)
+        let output = (try? String(contentsOf: LocalToolchainBackend.compilerLogURL, encoding: .utf8)) ?? ""
+        if !output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            BuildLogStore.append("Last compiler output:\n" + output.split(separator: "\n", omittingEmptySubsequences: false).suffix(200).joined(separator: "\n"), to: file)
+        }
+        BuildLogStore.finish(file, result: .crashed)
+    }
 
     /// If the previous build ended in a crash, shows where, and what the compiler said last.
     private func reportPreviousCrash() {
@@ -141,6 +170,10 @@ final class BuildCoordinator {
 
     private func fail(_ message: String) -> Bool {
         append(message)
+        for diagnostic in diagnostics {
+            BuildLogStore.append(diagnostic.summary, to: logFile)
+        }
+        BuildLogStore.finish(logFile, result: .failed)
         phase = .failed
         return false
     }

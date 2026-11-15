@@ -35,6 +35,13 @@ struct BuildLogView: View {
             .navigationTitle("Build")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    NavigationLink {
+                        BuildLogsView()
+                    } label: {
+                        Label("Build Logs", systemImage: "clock.arrow.circlepath")
+                    }
+                }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
                 }
