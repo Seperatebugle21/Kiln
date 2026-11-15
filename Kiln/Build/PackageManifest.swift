@@ -276,7 +276,7 @@ private final class ManifestReader {
                     defines.append(string(parsed.arguments["to"]).map { "\(value)=\($0)" } ?? value)
                 }
             case "unsafeFlags":
-                cFlags += elements(parsed.arguments[""]).compactMap(string).filter(Self.isSafeClangFlag)
+                cFlags += elements(parsed.arguments[""]).compactMap(string).filter(PackageManifestFlags.isSafeClangFlag)
             default:
                 break
             }
@@ -303,7 +303,7 @@ private final class ManifestReader {
                 let mode = (parsed.arguments[""]?.trimmedDescription ?? "").filter { $0.isNumber || $0 == "." }
                 if !mode.isEmpty { swiftFlags += ["-swift-version", mode] }
             case "unsafeFlags":
-                swiftFlags += Self.safeSwiftFlags(elements(parsed.arguments[""]).compactMap(string))
+                swiftFlags += PackageManifestFlags.safeSwiftFlags(elements(parsed.arguments[""]).compactMap(string))
             default:
                 break
             }
@@ -387,32 +387,6 @@ private final class ManifestReader {
         return standard.hasPrefix("++") ? "c" + standard : standard
     }
 
-    /// unsafeFlags Kiln can pass on: defines, include paths, warnings and language options.
-    /// Others (optimisation levels, linker or architecture flags) are left out.
-    static func isSafeClangFlag(_ flag: String) -> Bool {
-        ["-D", "-U", "-I", "-W", "-f", "-std="].contains { flag.hasPrefix($0) }
-            && !flag.hasPrefix("-fprofile") && !flag.hasPrefix("-fsanitize") && !flag.hasPrefix("-Wl,")
-    }
-
-    static func safeSwiftFlags(_ flags: [String]) -> [String] {
-        var result: [String] = []
-        var index = 0
-        while index < flags.count {
-            let flag = flags[index]
-            if ["-enable-upcoming-feature", "-enable-experimental-feature", "-Xcc", "-swift-version"].contains(flag),
-               index + 1 < flags.count {
-                result += [flag, flags[index + 1]]
-                index += 2
-                continue
-            }
-            if flag.hasPrefix("-D") || flag.hasPrefix("-enable-") || flag.hasPrefix("-disable-") || flag.hasPrefix("-warn") {
-                result.append(flag)
-            }
-            index += 1
-        }
-        return result
-    }
-
     // MARK: Syntax helpers
 
     /// `.name(label: value, …)` or `Name(…)`: the function name and arguments by label ("" if none;
@@ -470,6 +444,35 @@ private final class ManifestReader {
     private func string(_ expression: ExprSyntax?) -> String? {
         guard let literal = resolved(expression)?.as(StringLiteralExprSyntax.self) else { return nil }
         return literal.segments.compactMap { $0.as(StringSegmentSyntax.self)?.content.text }.joined()
+    }
+}
+
+/// Which compiler flags from a project or package Kiln passes on.
+enum PackageManifestFlags {
+    /// unsafeFlags Kiln can pass on: defines, include paths, warnings and language options.
+    /// Others (optimisation levels, linker or architecture flags) are left out.
+    static func isSafeClangFlag(_ flag: String) -> Bool {
+        ["-D", "-U", "-I", "-W", "-f", "-std="].contains { flag.hasPrefix($0) }
+            && !flag.hasPrefix("-fprofile") && !flag.hasPrefix("-fsanitize") && !flag.hasPrefix("-Wl,")
+    }
+
+    static func safeSwiftFlags(_ flags: [String]) -> [String] {
+        var result: [String] = []
+        var index = 0
+        while index < flags.count {
+            let flag = flags[index]
+            if ["-enable-upcoming-feature", "-enable-experimental-feature", "-Xcc", "-swift-version"].contains(flag),
+               index + 1 < flags.count {
+                result += [flag, flags[index + 1]]
+                index += 2
+                continue
+            }
+            if flag.hasPrefix("-D") || flag.hasPrefix("-enable-") || flag.hasPrefix("-disable-") || flag.hasPrefix("-warn") {
+                result.append(flag)
+            }
+            index += 1
+        }
+        return result
     }
 }
 

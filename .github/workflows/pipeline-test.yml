@@ -13,8 +13,20 @@ on:
       - ".github/workflows/pipeline-test.yml"
       - "Toolchain/test/**"
       - "Kiln/Signing/**"
+      - "Kiln/Build/MiniYAML.swift"
 
 jobs:
+  project-reader:
+    runs-on: macos-26
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Test the YAML reader on an XcodeGen project
+        run: |
+          xcrun swiftc -o "$RUNNER_TEMP/yamlcli" Kiln/Build/MiniYAML.swift Toolchain/test/YAMLCLI/main.swift
+          "$RUNNER_TEMP/yamlcli" Toolchain/test/YAMLCLI/project.yml
+
   pipeline:
     runs-on: macos-26
     timeout-minutes: 45

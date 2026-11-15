@@ -101,20 +101,40 @@ enum BuildPlanner {
             // An Xcode project, an XcodeGen project or a folder of Swift files.
             let project = XcodeProjectReader.read(root)
             plan.bridgingHeader = project.bridgingHeader
+            plan.warnings += project.warnings
             dependencyBase = root
             directDependencies = project.packages
             appRequirements = project.products.map { .byName($0) }
             let packageFolders = findPackageFolders(in: root)
-            if directDependencies.isEmpty {
+            if let sources = project.sources {
+                // The app target of the Xcode or XcodeGen project.
+                plan.appSources = sources.filter { swiftExtensions.contains($0.pathExtension.lowercased()) }
+                plan.appCSources = sources.filter { clangExtensions.contains($0.pathExtension.lowercased()) }
+                plan.appSwiftFlags = project.swiftFlags
+                plan.appResources = project.resources.map { ResourceItem(url: $0, copy: false) }
+                if !plan.appResources.isEmpty { plan.appBundleName = "\(project.targetName ?? "App")_Resources" }
+                for framework in project.frameworks {
+                    do {
+                        plan.modules.append(try frameworkModule(framework))
+                    } catch {
+                        plan.warnings.append("\(framework.lastPathComponent): \(error.localizedDescription)")
+                    }
+                }
+            }
+            if project.sources != nil {
+                // Sources came from the project file.
+            } else if directDependencies.isEmpty {
                 // A plain folder: every Swift package inside it is a dependency of the app.
                 directDependencies = packageFolders.map { folder in
                     let relative = String(folder.path.dropFirst(root.standardizedFileURL.path.count + 1))
                     return PackageManifest.Dependency(location: .path(relative), requirement: .none, name: nil)
                 }
             }
-            plan.appSources = files(in: [root], extensions: swiftExtensions, excluding: packageFolders, skipTests: true)
-            if plan.bridgingHeader != nil {
-                plan.appCSources = files(in: [root], extensions: clangExtensions, excluding: packageFolders, skipTests: true)
+            if project.sources == nil {
+                plan.appSources = files(in: [root], extensions: swiftExtensions, excluding: packageFolders, skipTests: true)
+                if plan.bridgingHeader != nil {
+                    plan.appCSources = files(in: [root], extensions: clangExtensions, excluding: packageFolders, skipTests: true)
+                }
             }
         }
 
@@ -329,13 +349,28 @@ enum BuildPlanner {
         } else {
             throw BinaryError.noArtifact
         }
+        var module = try frameworkModule(artifact)
+        module.name = target.name
+        return module
+    }
+
+    /// An .xcframework (or a folder holding one, or a bare .framework), reduced to its iOS device slice.
+    static func frameworkModule(_ location: URL) throws -> BuildModule {
+        var artifact = location
+        let name = location.deletingPathExtension().lastPathComponent
+        if artifact.pathExtension == "framework" {
+            var module = BuildModule(name: name, language: .binary, sources: [], publicHeaders: nil,
+                                     headerSearchPaths: [], defines: [], swiftDefines: [], dependencies: [])
+            module.frameworks = [artifact]
+            return module
+        }
         if artifact.pathExtension != "xcframework" {
             // Unzipped folders hold the .xcframework (or a bare .framework).
             let found = (try? FileManager.default.contentsOfDirectory(at: artifact, includingPropertiesForKeys: nil)) ?? []
             if let xcframework = found.first(where: { $0.pathExtension == "xcframework" }) {
                 artifact = xcframework
             } else if let framework = found.first(where: { $0.pathExtension == "framework" }) {
-                var module = BuildModule(name: target.name, language: .binary, sources: [], publicHeaders: nil,
+                var module = BuildModule(name: name, language: .binary, sources: [], publicHeaders: nil,
                                          headerSearchPaths: [], defines: [], swiftDefines: [], dependencies: [])
                 module.frameworks = [framework]
                 return module
@@ -356,7 +391,7 @@ enum BuildPlanner {
 
         let folder = artifact.appendingPathComponent(identifier, isDirectory: true)
         let library = folder.appendingPathComponent(libraryPath)
-        var module = BuildModule(name: target.name, language: .binary, sources: [], publicHeaders: nil,
+        var module = BuildModule(name: name, language: .binary, sources: [], publicHeaders: nil,
                                  headerSearchPaths: [], defines: [], swiftDefines: [], dependencies: [])
         if library.pathExtension == "framework" {
             module.frameworks = [library]
@@ -433,159 +468,5 @@ enum BuildPlanner {
             }
         }
         return folders
-    }
-}
-
-/// Package references and settings from Xcode projects (project.pbxproj) and XcodeGen (project.yml).
-enum XcodeProjectReader {
-    struct Project {
-        var packages: [PackageManifest.Dependency] = []
-        /// Product names the app target depends on.
-        var products: [String] = []
-        var bridgingHeader: URL?
-    }
-
-    static func read(_ root: URL) -> Project {
-        var project = Project()
-        let names = (try? FileManager.default.contentsOfDirectory(atPath: root.path)) ?? []
-        for name in names where name.hasSuffix(".xcodeproj") {
-            readPBXProject(root.appendingPathComponent(name).appendingPathComponent("project.pbxproj"), root: root, into: &project)
-        }
-        let yml = root.appendingPathComponent("project.yml")
-        if FileManager.default.fileExists(atPath: yml.path) {
-            readXcodeGen(yml, root: root, into: &project)
-        }
-        return project
-    }
-
-    private static func readPBXProject(_ url: URL, root: URL, into project: inout Project) {
-        guard let data = try? Data(contentsOf: url),
-              let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
-              let objects = plist["objects"] as? [String: [String: Any]]
-        else { return }
-
-        for object in objects.values {
-            switch object["isa"] as? String {
-            case "XCLocalSwiftPackageReference":
-                if let path = object["relativePath"] as? String {
-                    project.packages.append(.init(location: .path(path), requirement: .none, name: nil))
-                }
-            case "XCRemoteSwiftPackageReference":
-                guard let url = object["repositoryURL"] as? String else { continue }
-                let requirement = object["requirement"] as? [String: Any] ?? [:]
-                var parsed = PackageManifest.Requirement.none
-                switch requirement["kind"] as? String {
-                case "upToNextMajorVersion":
-                    if let version = requirement["minimumVersion"] as? String { parsed = .from(version) }
-                case "upToNextMinorVersion":
-                    if let version = requirement["minimumVersion"] as? String { parsed = .upToNextMinor(version) }
-                case "exactVersion":
-                    if let version = requirement["version"] as? String { parsed = .exact(version) }
-                case "versionRange":
-                    if let lower = requirement["minimumVersion"] as? String, let upper = requirement["maximumVersion"] as? String {
-                        parsed = .range(lower: lower, upper: upper)
-                    }
-                case "branch":
-                    if let branch = requirement["branch"] as? String { parsed = .branch(branch) }
-                case "revision":
-                    if let revision = requirement["revision"] as? String { parsed = .revision(revision) }
-                default:
-                    break
-                }
-                project.packages.append(.init(location: .url(url), requirement: parsed, name: nil))
-            case "XCSwiftPackageProductDependency":
-                if let product = object["productName"] as? String { project.products.append(product) }
-            case "XCBuildConfiguration":
-                if project.bridgingHeader == nil,
-                   let settings = object["buildSettings"] as? [String: Any],
-                   let header = settings["SWIFT_OBJC_BRIDGING_HEADER"] as? String, !header.isEmpty {
-                    project.bridgingHeader = resolve(header, root: root)
-                }
-            default:
-                break
-            }
-        }
-    }
-
-    /// The `packages:` block and `- package:` dependencies of an XcodeGen project.yml.
-    private static func readXcodeGen(_ url: URL, root: URL, into project: inout Project) {
-        guard let text = try? String(contentsOf: url, encoding: .utf8) else { return }
-        let lines = text.components(separatedBy: "\n")
-        func indent(_ line: String) -> Int { line.prefix { $0 == " " }.count }
-        func value(_ line: String) -> String {
-            guard let colon = line.firstIndex(of: ":") else { return "" }
-            var result = line[line.index(after: colon)...].trimmingCharacters(in: .whitespaces)
-            if let comment = result.range(of: " #") { result = String(result[..<comment.lowerBound]) }
-            return result.trimmingCharacters(in: CharacterSet(charactersIn: "\"' "))
-        }
-        func key(_ line: String) -> String {
-            line.trimmingCharacters(in: .whitespaces).split(separator: ":").first.map(String.init) ?? ""
-        }
-
-        var index = 0
-        while index < lines.count {
-            let line = lines[index]
-            if line.hasPrefix("packages:") {
-                index += 1
-                var current: [String: String] = [:]
-                var packageIndent = -1
-                func flush() {
-                    guard !current.isEmpty else { return }
-                    defer { current = [:] }
-                    var requirement = PackageManifest.Requirement.none
-                    if let version = current["from"] ?? current["majorVersion"] { requirement = .from(version) }
-                    if let version = current["minorVersion"] { requirement = .upToNextMinor(version) }
-                    if let version = current["exactVersion"] ?? current["version"] { requirement = .exact(version) }
-                    if let branch = current["branch"] { requirement = .branch(branch) }
-                    if let revision = current["revision"] { requirement = .revision(revision) }
-                    if let lower = current["minVersion"], let upper = current["maxVersion"] { requirement = .range(lower: lower, upper: upper) }
-                    if let path = current["path"] {
-                        project.packages.append(.init(location: .path(path), requirement: .none, name: nil))
-                    } else if let url = current["url"] {
-                        project.packages.append(.init(location: .url(url), requirement: requirement, name: nil))
-                    } else if let github = current["github"] {
-                        project.packages.append(.init(location: .url("https://github.com/\(github)"), requirement: requirement, name: nil))
-                    }
-                }
-                while index < lines.count {
-                    let entry = lines[index]
-                    if entry.trimmingCharacters(in: .whitespaces).isEmpty || entry.trimmingCharacters(in: .whitespaces).hasPrefix("#") {
-                        index += 1
-                        continue
-                    }
-                    let level = indent(entry)
-                    if level == 0 { break }
-                    if packageIndent < 0 { packageIndent = level }
-                    if level == packageIndent {
-                        flush()
-                    } else {
-                        current[key(entry)] = value(entry)
-                    }
-                    index += 1
-                }
-                flush()
-                continue
-            }
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            if trimmed.hasPrefix("- package:") {
-                var product = value(trimmed)
-                if index + 1 < lines.count, lines[index + 1].trimmingCharacters(in: .whitespaces).hasPrefix("product:") {
-                    product = value(lines[index + 1])
-                }
-                if !product.isEmpty { project.products.append(product) }
-            }
-            if trimmed.hasPrefix("SWIFT_OBJC_BRIDGING_HEADER:"), project.bridgingHeader == nil {
-                project.bridgingHeader = resolve(value(trimmed), root: root)
-            }
-            index += 1
-        }
-    }
-
-    private static func resolve(_ path: String, root: URL) -> URL {
-        var cleaned = path
-        for variable in ["$(SRCROOT)/", "$(PROJECT_DIR)/", "${SRCROOT}/", "${PROJECT_DIR}/"] {
-            cleaned = cleaned.replacingOccurrences(of: variable, with: "")
-        }
-        return root.appendingPathComponent(cleaned).standardizedFileURL
     }
 }

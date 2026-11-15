@@ -1,0 +1,51 @@
+name: Demo
+
+options:
+  deploymentTarget:
+    iOS: "26.0"
+
+settings:
+  base:
+    SWIFT_VERSION: "5.9"   # trailing comment
+
+packages:
+  Models:
+    url: https://github.com/example/models
+    exactVersion: 2.25.6
+  Soup:
+    url: https://github.com/example/Soup.git
+    from: 2.6.0
+  Native:
+    path: Packages/Native
+
+targets:
+  Demo:
+    type: application
+    platform: iOS
+    sources:
+      - path: Demo.swiftpm/Demo
+      - path: Demo.swiftpm/Assets.xcassets
+        buildPhase: resources
+    settings:
+      base:
+        PRODUCT_NAME: Demo
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) DEMO_APP"
+    dependencies:
+      - package: Models
+        product: ModelsLLM
+      - package: Soup
+      # A comment between items.
+      - framework: Python/Python.xcframework
+        embed: true
+      - target: DemoWidget
+        embed: true
+    postBuildScripts:
+      - name: Install
+        script: |
+          "$PROJECT_DIR/Scripts/install.sh" # not a comment inside the script? it is stripped
+          echo done
+
+  DemoWidget:
+    type: app-extension
+    sources: [DemoWidget, Shared/Models.swift]
+    settings: {PRODUCT_NAME: DemoWidget}

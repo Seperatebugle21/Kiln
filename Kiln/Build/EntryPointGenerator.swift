@@ -27,6 +27,8 @@ enum EntryPointGenerator {
     }
 
     static func prepare(_ files: [SourceFile]) throws -> [SourceFile] {
+        // Widgets and other extensions also use @main; the app is the one with a WindowGroup.
+        var firstFailure: Failure?
         for (index, file) in files.enumerated() {
             let tree = Parser.parse(source: file.text)
             let finder = MainAppFinder()
@@ -35,7 +37,8 @@ enum EntryPointGenerator {
 
             let appName = app.name.trimmedDescription
             guard let content = windowGroupContent(of: app) else {
-                throw Failure.noWindowGroup(appName)
+                if firstFailure == nil { firstFailure = .noWindowGroup(appName) }
+                continue
             }
 
             var result = files
@@ -43,7 +46,7 @@ enum EntryPointGenerator {
             result.append(SourceFile(path: generatedFileName, text: entryPointSource(members: copiedMembers(of: app), content: content)))
             return result
         }
-        throw Failure.noMainApp
+        throw firstFailure ?? Failure.noMainApp
     }
 
     private static func removing(_ attribute: AttributeSyntax, from text: String) -> String {
