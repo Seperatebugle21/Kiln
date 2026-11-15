@@ -27,6 +27,14 @@ echo "::endgroup::"
 grep -q "TeamIdentifier=KILNTEST01" "$WORK/display.txt"
 grep -q "Hash type=sha256" "$WORK/display.txt"
 
+echo "::group::CMS structure"
+python3 "$ROOT/Toolchain/test/extract-cms.py" "$WORK/signed.dylib" "$WORK/cms.der"
+openssl asn1parse -inform DER -in "$WORK/cms.der" -i | head -80 || true
+openssl cms -cmsout -print -inform DER -in "$WORK/cms.der" | head -60 || true
+openssl cms -verify -inform DER -in "$WORK/cms.der" -binary -noverify \
+  -content "$WORK/cd.bin" -out /dev/null 2>&1 || true
+echo "::endgroup::"
+
 # The CMS must parse: codesign extracts its certificates, which must be our test certificate.
 # (Authority shows "(unavailable)" for an untrusted, self-signed certificate.)
 codesign -d --extract-certificates="$WORK/extracted-" "$WORK/signed.dylib"
