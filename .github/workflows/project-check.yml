@@ -21,6 +21,8 @@ on:
       - "Kiln/Build/**"
       - "Kiln/Project/ZipArchive.swift"
       - "Toolchain/test/KilnCLI/**"
+      - "Toolchain/test/MacroCheck/**"
+      - "Toolchain/macros/**"
 
 permissions:
   contents: read
@@ -69,6 +71,19 @@ jobs:
           IFACE=$(ls "$SDK"/System/Library/Frameworks/FoundationModels.framework/Modules/FoundationModels.swiftmodule/arm64e-apple-ios.swiftinterface)
           grep -nE "macro Generable|macro Guide|protocol Generable|protocol ConvertibleFromGeneratedContent|protocol ConvertibleToGeneratedContent|struct GenerationSchema|struct Property|init\(name|public init\(type|struct GenerationID|struct GenerationGuide|func value|init\(properties|init\(kind|struct GeneratedContent|enum Kind|init\(_ content|static func anyOf|init\(type:.*anyOf" "$IFACE" | head -120
 
+      - name: Build Kiln's FoundationModelsMacros and expand the sample with it
+        run: |
+          cp Toolchain/macros/FoundationModelsMacros/FoundationModelsMacros.swift Toolchain/test/MacroCheck/Sources/FoundationModelsMacros/
+          (cd Toolchain/test/MacroCheck && swift build -c release 2>&1 | tail -20)
+          KILN_MACROS="$PWD/Toolchain/test/MacroCheck/.build/release/FoundationModelsMacros"
+          echo "KILN_MACROS=$KILN_MACROS" >> "$GITHUB_ENV"
+          xcrun swiftc -target arm64-apple-ios26.0 -sdk "$(xcrun --sdk iphoneos --show-sdk-path)" -typecheck \
+            -load-plugin-executable "$KILN_MACROS#FoundationModelsMacros" \
+            -Xfrontend -dump-macro-expansions Toolchain/test/macro-samples/GenerableSample.swift 2>&1 | tail -80
+          xcrun swiftc -target arm64-apple-ios26.0 -sdk "$(xcrun --sdk iphoneos --show-sdk-path)" -typecheck \
+            -load-plugin-executable "$KILN_MACROS#FoundationModelsMacros" Toolchain/test/macro-samples/GenerableSample.swift
+          echo "Kiln's FoundationModelsMacros: sample type-checks"
+
       - name: Fetch the project
         run: |
           git clone --depth 1 ${PROJECT_REF:+--branch "$PROJECT_REF"} "https://github.com/$PROJECT_REPO" "$RUNNER_TEMP/project"
@@ -93,7 +108,7 @@ jobs:
           export KILN_SWIFT_FRONTEND="$TOOLCHAIN/usr/bin/swift-frontend"
           export KILN_SWIFT_RESOURCES="$TOOLCHAIN/usr/lib/swift"
           export KILN_LLD="$LLD"
-          export KILN_PLUGIN_ARGS="-plugin-path $TOOLCHAIN/usr/lib/swift/host/plugins -in-process-plugin-server-path $TOOLCHAIN/usr/lib/swift/host/libSwiftInProcPluginServer.dylib $PLATFORM_PLUGINS"
+          export KILN_PLUGIN_ARGS="-load-plugin-executable $KILN_MACROS#FoundationModelsMacros -plugin-path $TOOLCHAIN/usr/lib/swift/host/plugins -in-process-plugin-server-path $TOOLCHAIN/usr/lib/swift/host/libSwiftInProcPluginServer.dylib $PLATFORM_PLUGINS"
           Toolchain/test/KilnCLI/.build/release/kiln-build "$RUNNER_TEMP/project" 2>&1 | tee "$RUNNER_TEMP/kiln-build.log"
           exit ${PIPESTATUS[0]}
 
