@@ -96,12 +96,15 @@ final class LineNumberTextView: UITextView {
         let visible = rect.offsetBy(dx: -inset.left, dy: -inset.top)
         let glyphs = layoutManager.glyphRange(forBoundingRect: visible, in: textContainer)
         let text = self.text as NSString? ?? ""
+        var found: [(Int, CGRect)] = []
         layoutManager.enumerateLineFragments(forGlyphRange: glyphs) { fragment, _, _, glyphRange, _ in
             let characterIndex = self.layoutManager.characterIndexForGlyph(at: glyphRange.location)
             let isLineStart = characterIndex == 0 || (characterIndex <= text.length && text.character(at: characterIndex - 1) == 10)
             guard isLineStart else { return }
-            let line = self.lineNumber(atCharacter: characterIndex)
-            body(line, fragment.offsetBy(dx: inset.left, dy: inset.top))
+            found.append((self.lineNumber(atCharacter: characterIndex), fragment.offsetBy(dx: inset.left, dy: inset.top)))
+        }
+        for (line, frame) in found {
+            body(line, frame)
         }
         // The empty last line after a trailing newline has no fragment of its own.
         if text.length == 0 || text.character(at: text.length - 1) == 10 {
