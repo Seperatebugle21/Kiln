@@ -339,8 +339,10 @@ enum XcodeProjectReader {
                 let requirement = object["requirement"] as? [String: Any] ?? [:]
                 var parsed = PackageManifest.Requirement.none
                 switch requirement["kind"] as? String {
-                case "upToNextMajorVersion", "upToNextMinorVersion":
+                case "upToNextMajorVersion":
                     if let version = requirement["minimumVersion"] as? String { parsed = .from(version) }
+                case "upToNextMinorVersion":
+                    if let version = requirement["minimumVersion"] as? String { parsed = .upToNextMinor(version) }
                 case "exactVersion":
                     if let version = requirement["version"] as? String { parsed = .exact(version) }
                 case "versionRange":
@@ -395,7 +397,8 @@ enum XcodeProjectReader {
                     guard !current.isEmpty else { return }
                     defer { current = [:] }
                     var requirement = PackageManifest.Requirement.none
-                    if let version = current["from"] ?? current["majorVersion"] ?? current["minorVersion"] { requirement = .from(version) }
+                    if let version = current["from"] ?? current["majorVersion"] { requirement = .from(version) }
+                    if let version = current["minorVersion"] { requirement = .upToNextMinor(version) }
                     if let version = current["exactVersion"] ?? current["version"] { requirement = .exact(version) }
                     if let branch = current["branch"] { requirement = .branch(branch) }
                     if let revision = current["revision"] { requirement = .revision(revision) }

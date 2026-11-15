@@ -36,7 +36,10 @@ struct PackageManifest {
         case exact(String)
         case branch(String)
         case revision(String)
-        case range(lower: String, upper: String)
+        /// `lower..<upper`; with `inclusive`, `lower...upper` (both ends allowed).
+        case range(lower: String, upper: String, inclusive: Bool = false)
+        /// `.upToNextMinor(from:)`: the same major and minor version.
+        case upToNextMinor(String)
         case none
     }
 
@@ -140,8 +143,10 @@ struct PackageManifest {
         if let parsed = call(expression) {
             let arguments = parsed.arguments
             switch parsed.name {
-            case "upToNextMajor", "upToNextMinor":
+            case "upToNextMajor":
                 if let version = string(arguments["from"]) { return .from(version) }
+            case "upToNextMinor":
+                if let version = string(arguments["from"]) { return .upToNextMinor(version) }
             case "exact":
                 if let version = string(arguments[""]) { return .exact(version) }
             case "branch":
@@ -155,7 +160,9 @@ struct PackageManifest {
         let strings = StringCollector()
         strings.walk(expression)
         if strings.values.count == 2 {
-            return .range(lower: strings.values[0], upper: strings.values[1])
+            // `"6.0.1" ... "6.0.1"` (closed, as mlx-swift-examples pins GzipSwift) or `"1.0.0"..<"2.0.0"`.
+            let inclusive = !expression.description.contains("..<")
+            return .range(lower: strings.values[0], upper: strings.values[1], inclusive: inclusive)
         }
         return .none
     }

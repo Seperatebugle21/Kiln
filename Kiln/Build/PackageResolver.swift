@@ -91,15 +91,25 @@ final class PackageResolver: @unchecked Sendable {
             }
             guard let tag else { throw Failure.noMatchingVersion(repo, "from: \(lower)") }
             return tag
-        case .range(let lower, let upper):
+        case .upToNextMinor(let lower):
+            guard let minimum = Self.version(lower) else { throw Failure.noMatchingVersion(repo, "upToNextMinor: \(lower)") }
+            let tag = try await tag(owner: owner, repo: repo) { candidate in
+                guard let version = Self.version(candidate) else { return false }
+                return version[0] == minimum[0] && version[1] == minimum[1] && !version.lexicographicallyPrecedes(minimum)
+            }
+            guard let tag else { throw Failure.noMatchingVersion(repo, "upToNextMinor: \(lower)") }
+            return tag
+        case .range(let lower, let upper, let inclusive):
+            let description = "\(lower)\(inclusive ? "..." : "..<")\(upper)"
             guard let minimum = Self.version(lower), let maximum = Self.version(upper) else {
-                throw Failure.noMatchingVersion(repo, "\(lower)..<\(upper)")
+                throw Failure.noMatchingVersion(repo, description)
             }
             let tag = try await tag(owner: owner, repo: repo) { candidate in
                 guard let version = Self.version(candidate) else { return false }
-                return !version.lexicographicallyPrecedes(minimum) && version.lexicographicallyPrecedes(maximum)
+                let belowMaximum = inclusive ? !maximum.lexicographicallyPrecedes(version) : version.lexicographicallyPrecedes(maximum)
+                return !version.lexicographicallyPrecedes(minimum) && belowMaximum
             }
-            guard let tag else { throw Failure.noMatchingVersion(repo, "\(lower)..<\(upper)") }
+            guard let tag else { throw Failure.noMatchingVersion(repo, description) }
             return tag
         case .none:
             return "HEAD"
