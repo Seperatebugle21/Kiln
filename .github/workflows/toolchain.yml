@@ -18,6 +18,7 @@ on:
       - "Toolchain/*.sh"
       - "Toolchain/cmake/**"
       - "Toolchain/smoke/**"
+      - "Toolchain/macros/**"
 
 concurrency:
   group: toolchain-${{ github.ref }}
