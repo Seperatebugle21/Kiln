@@ -1,0 +1,6 @@
+// Build settings shared by all configurations.
+//
+// The Build Kiln workflow writes Toolchain.generated.xcconfig after downloading the on-device
+// compiler (header search paths, the static libraries to link, KILN_HAS_TOOLCHAIN=1).
+// Without it, Kiln builds with toolchain stubs.
+#include? "Toolchain.generated.xcconfig"

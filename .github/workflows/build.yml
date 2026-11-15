@@ -16,6 +16,9 @@ jobs:
   build:
     runs-on: macos-26
     timeout-minutes: 60
+    permissions:
+      contents: read
+      actions: read
 
     steps:
       - name: Checkout
@@ -28,6 +31,30 @@ jobs:
 
       - name: Install XcodeGen
         run: brew install xcodegen
+
+      # The on-device compiler comes from the latest successful Toolchain run on this branch
+      # (or main). Without it, Kiln still builds, with the compiler disabled.
+      - name: Fetch the on-device toolchain
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          RUN_ID=""
+          for branch in "${{ github.head_ref || github.ref_name }}" main; do
+            RUN_ID=$(gh run list --repo "${{ github.repository }}" --workflow toolchain.yml --branch "$branch" \
+              --status success --limit 1 --json databaseId --jq '.[0].databaseId // empty')
+            [ -n "$RUN_ID" ] && break
+          done
+          if [ -z "$RUN_ID" ]; then
+            echo "::warning::No successful Toolchain run found; building Kiln without the on-device compiler."
+            exit 0
+          fi
+          echo "Using Toolchain run $RUN_ID"
+          mkdir -p build/toolchain
+          gh run download "$RUN_ID" --repo "${{ github.repository }}" --pattern '*-ios-*' --dir build/toolchain
+          mkdir -p build/toolchain/llvm build/toolchain/swift
+          tar -xzf build/toolchain/llvm-ios-*/llvm-ios-*.tar.gz -C build/toolchain/llvm
+          tar -xzf build/toolchain/swift-ios-*/swift-ios-*.tar.gz -C build/toolchain/swift
+          Toolchain/assemble-app-toolchain.sh build/toolchain/llvm build/toolchain/swift
 
       - name: Generate Xcode project
         run: xcodegen generate

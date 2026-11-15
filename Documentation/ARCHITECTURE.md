@@ -43,7 +43,8 @@ refusal fallbacks. Response content (including thinking blocks) is sent back unc
 | Phase | Scope | Status |
 |---|---|---|
 | 1 | Editor, project opening, file tree, build pipeline up to the entry point, runner, Claude with tools, CI that builds an unsigned IPA | In progress |
-| 2 | Swift toolchain (`swift-frontend` + `lld`) built for iOS by a separate workflow, SDK interfaces, on-device signing with the development certificate | Planned |
+| 2 | Swift toolchain (`swift-frontend` + `lld`) built for iOS by the Toolchain workflow and linked into Kiln; the SDK and compiler resources bundled; Run compiles, links and loads on the device (ad-hoc signed, needs JIT for now) | In progress |
+| 2b | Signing built apps with the development certificate, so JIT is no longer needed; prebuilt module cache for a fast first build | Planned |
 | 3 | Incremental builds, SwiftUI macros that are closed source (`#Preview`, `@Entry`), console for `print`, asset catalogs, a relaunch mode for full-fidelity runs | Planned |
 
 ### Phase 2 notes

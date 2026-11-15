@@ -22,8 +22,21 @@ targets:
     platform: iOS
     sources:
       - path: Kiln
+      # The on-device toolchain's data (SDK, compiler resources, runtime helpers), assembled by the
+      # Build Kiln workflow. Copied into the app as a folder named Toolchain.
+      - path: build/ToolchainBundle/Toolchain
+        type: folder
+        buildPhase: resources
+        optional: true
+    configFiles:
+      Debug: Configuration/Kiln.xcconfig
+      Release: Configuration/Kiln.xcconfig
     settings:
       base:
+        SWIFT_OBJC_BRIDGING_HEADER: Kiln/Toolchain/Kiln-Bridging-Header.h
+        CLANG_CXX_LANGUAGE_STANDARD: c++17
+        # LLVM and Swift are built without RTTI.
+        GCC_ENABLE_CPP_RTTI: NO
         PRODUCT_BUNDLE_IDENTIFIER: app.kiln.ide
         PRODUCT_NAME: Kiln
         GENERATE_INFOPLIST_FILE: YES
