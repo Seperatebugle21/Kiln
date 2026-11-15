@@ -15,18 +15,71 @@ struct WelcomeView: View {
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 28) {
+            List {
+                Section {
                     header
-                    actions
-                    projectSection
+                        .listRowBackground(Color.clear)
+                        .listRowInsets(EdgeInsets())
                 }
-                .padding(.horizontal, 20)
-                .padding(.bottom, 32)
+
+                Section {
+                    ActionRow(title: "New Project", systemImage: "plus", color: .accentColor) {
+                        showsNewProject = true
+                    }
+                    ActionRow(title: "Open from Files", systemImage: "folder.fill", color: .blue) {
+                        DocumentPicker.present(contentTypes: DocumentPicker.projectTypes) { url in
+                            handlePickedProject(url)
+                        }
+                    }
+                    ActionRow(title: "Clone from GitHub", systemImage: "arrow.down", color: Color(white: 0.2)) {
+                        showsClone = true
+                    }
+                }
+
+                Section {
+                    if summaries.isEmpty {
+                        Text("Your projects will appear here.")
+                            .foregroundStyle(.secondary)
+                    } else if filtered.isEmpty {
+                        Text("No projects match \u{201C}\(search)\u{201D}.")
+                            .foregroundStyle(.secondary)
+                    }
+                    ForEach(filtered) { project in
+                        Button {
+                            projects.open(project.url)
+                        } label: {
+                            ProjectRow(project: project)
+                        }
+                        .swipeActions {
+                            Button("Delete", systemImage: "trash", role: .destructive) { pendingDeletion = project }
+                            Button("Rename", systemImage: "pencil") {
+                                newName = project.name
+                                renaming = project
+                            }
+                            .tint(.orange)
+                        }
+                        .contextMenu {
+                            Button("Open", systemImage: "arrow.up.forward.app") { projects.open(project.url) }
+                            Button("Rename", systemImage: "pencil") {
+                                newName = project.name
+                                renaming = project
+                            }
+                            Button("Duplicate", systemImage: "plus.square.on.square") { duplicate(project) }
+                            Divider()
+                            Button("Delete", systemImage: "trash", role: .destructive) { pendingDeletion = project }
+                        }
+                    }
+                } header: {
+                    Text("Projects")
+                } footer: {
+                    Text("Stored in Files › On My iPhone › Kiln. Projects you open from elsewhere are copied here.")
+                }
             }
-            .background(Color(.systemGroupedBackground))
-            .scrollDismissesKeyboard(.immediately)
+            .listStyle(.insetGrouped)
+            .listSectionSpacing(.compact)
+            .searchable(text: $search, placement: .navigationBarDrawer(displayMode: .automatic), prompt: "Search projects")
             .refreshable { reload() }
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
@@ -93,126 +146,23 @@ struct WelcomeView: View {
     // MARK: Sections
 
     private var header: some View {
-        HStack(spacing: 16) {
+        VStack(spacing: 10) {
             Image("KilnLogo")
                 .resizable()
-                .frame(width: 64, height: 64)
-                .clipShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
-                .shadow(color: .black.opacity(0.12), radius: 8, y: 4)
+                .frame(width: 88, height: 88)
+                .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+                .shadow(color: Color.accentColor.opacity(0.25), radius: 16, y: 8)
                 .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Kiln")
-                    .font(.largeTitle.bold())
-                Text("Build and run SwiftUI apps on your iPhone.")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .padding(.top, 8)
-    }
-
-    private var actions: some View {
-        HStack(spacing: 12) {
-            ActionTile(title: "New", subtitle: "From a template", systemImage: "plus", prominent: true) {
-                showsNewProject = true
-            }
-            ActionTile(title: "Open", subtitle: "From Files", systemImage: "folder") {
-                DocumentPicker.present(contentTypes: DocumentPicker.projectTypes) { url in
-                    handlePickedProject(url)
-                }
-            }
-            ActionTile(title: "Clone", subtitle: "From GitHub", systemImage: "arrow.down.circle") {
-                showsClone = true
-            }
-        }
-    }
-
-    @ViewBuilder
-    private var projectSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Text("Projects")
-                    .font(.title2.bold())
-                Spacer()
-                if !summaries.isEmpty {
-                    Text("\(summaries.count)")
-                        .font(.subheadline.monospacedDigit())
-                        .foregroundStyle(.secondary)
-                }
-            }
-
-            if summaries.count > 5 {
-                HStack {
-                    Image(systemName: "magnifyingglass")
-                        .foregroundStyle(.secondary)
-                    TextField("Search projects", text: $search)
-                        .autocorrectionDisabled()
-                        .textInputAutocapitalization(.never)
-                    if !search.isEmpty {
-                        Button {
-                            search = ""
-                        } label: {
-                            Image(systemName: "xmark.circle.fill")
-                                .foregroundStyle(.secondary)
-                        }
-                        .accessibilityLabel("Clear search")
-                    }
-                }
-                .padding(10)
-                .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-            }
-
-            if summaries.isEmpty {
-                emptyState
-            } else if filtered.isEmpty {
-                Text("No projects match \u{201C}\(search)\u{201D}.")
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 24)
-            } else {
-                LazyVStack(spacing: 10) {
-                    ForEach(filtered) { project in
-                        ProjectCard(project: project) {
-                            projects.open(project.url)
-                        }
-                        .contextMenu {
-                            Button("Open", systemImage: "arrow.up.forward.app") { projects.open(project.url) }
-                            Button("Rename", systemImage: "pencil") {
-                                newName = project.name
-                                renaming = project
-                            }
-                            Button("Duplicate", systemImage: "plus.square.on.square") { duplicate(project) }
-                            Divider()
-                            Button("Delete", systemImage: "trash", role: .destructive) { pendingDeletion = project }
-                        }
-                    }
-                }
-            }
-
-            Text("Projects live in Files › On My iPhone › Kiln › Projects. Projects you open from elsewhere are copied there, so they always reopen.")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-                .padding(.top, 4)
-        }
-    }
-
-    private var emptyState: some View {
-        VStack(spacing: 14) {
-            Image(systemName: "hammer")
-                .font(.system(size: 36))
-                .foregroundStyle(.tint)
-            Text("No projects yet")
-                .font(.headline)
-            Text("Start from a template, or open a Swift package, a .swiftpm or an Xcode project.")
+            Text("Kiln")
+                .font(.system(.largeTitle, design: .rounded).weight(.bold))
+            Text("Build and run SwiftUI apps on your iPhone")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
-            Button("Create a Project") { showsNewProject = true }
-                .buttonStyle(.borderedProminent)
         }
         .frame(maxWidth: .infinity)
-        .padding(28)
-        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .padding(.top, 12)
+        .padding(.bottom, 8)
     }
 
     @ViewBuilder
@@ -317,96 +267,83 @@ struct ProjectSummary: Identifiable, Hashable {
         }
     }
 
+    var color: Color {
+        if url.pathExtension == "swiftpm" { return .orange }
+        switch kind {
+        case .xcodeProject: return .blue
+        case .swiftPackage: return .brown
+        case .folder: return .gray
+        }
+    }
+
     var kindLabel: String {
         url.pathExtension == "swiftpm" ? "App Playground" : kind.rawValue
     }
 }
 
-private struct ActionTile: View {
-    let title: String
-    let subtitle: String
+/// A rounded, colored icon like the ones in the Settings app.
+private struct RowIcon: View {
     let systemImage: String
-    var prominent = false
+    let color: Color
+
+    var body: some View {
+        Image(systemName: systemImage)
+            .font(.system(size: 15, weight: .semibold))
+            .foregroundStyle(.white)
+            .frame(width: 30, height: 30)
+            .background(color.gradient, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+    }
+}
+
+private struct ActionRow: View {
+    let title: String
+    let systemImage: String
+    let color: Color
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
-            VStack(alignment: .leading, spacing: 10) {
-                Image(systemName: systemImage)
-                    .font(.title2.weight(.semibold))
-                    .frame(width: 44, height: 44)
-                    .background(prominent ? Color.white.opacity(0.22) : Color.accentColor.opacity(0.14), in: Circle())
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(title)
-                        .font(.headline)
-                    Text(subtitle)
-                        .font(.caption)
-                        .opacity(0.75)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.8)
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(14)
-            .foregroundStyle(prominent ? Color.white : Color.accentColor)
-            .background(
-                prominent ? Color.accentColor : Color(.secondarySystemGroupedBackground),
-                in: RoundedRectangle(cornerRadius: 20, style: .continuous)
-            )
-        }
-        .buttonStyle(PressableStyle())
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(title) project, \(subtitle)")
-    }
-}
-
-private struct ProjectCard: View {
-    let project: ProjectSummary
-    let open: () -> Void
-
-    var body: some View {
-        Button(action: open) {
             HStack(spacing: 14) {
-                Image(systemName: project.systemImage)
-                    .font(.title3)
-                    .foregroundStyle(.white)
-                    .frame(width: 46, height: 46)
-                    .background(Color.accentColor.gradient, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(project.name)
-                        .font(.body.weight(.semibold))
-                        .foregroundStyle(.primary)
-                        .lineLimit(1)
-                    HStack(spacing: 6) {
-                        Text(project.kindLabel)
-                        if let modified = project.modified {
-                            Text("·")
-                            Text(modified, format: .relative(presentation: .named))
-                        }
-                    }
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                }
-                Spacer(minLength: 8)
+                RowIcon(systemImage: systemImage, color: color)
+                Text(title)
+                    .foregroundStyle(.primary)
+                Spacer()
                 Image(systemName: "chevron.right")
                     .font(.footnote.weight(.semibold))
                     .foregroundStyle(.tertiary)
             }
-            .padding(12)
-            .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-            .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         }
-        .buttonStyle(PressableStyle())
     }
 }
 
-/// Scales a card down slightly while it is pressed.
-private struct PressableStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .scaleEffect(configuration.isPressed ? 0.97 : 1)
-            .animation(.spring(duration: 0.2), value: configuration.isPressed)
+private struct ProjectRow: View {
+    let project: ProjectSummary
+
+    var body: some View {
+        HStack(spacing: 14) {
+            RowIcon(systemImage: project.systemImage, color: project.color)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(project.name)
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                HStack(spacing: 4) {
+                    Text(project.kindLabel)
+                    if let modified = project.modified {
+                        Text("·")
+                        Text(modified, format: .relative(presentation: .named))
+                    }
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            }
+            Spacer(minLength: 8)
+            Image(systemName: "chevron.right")
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(.tertiary)
+        }
+        .padding(.vertical, 2)
+        .contentShape(Rectangle())
     }
 }
 
