@@ -57,3 +57,26 @@ if echo "$VERIFY" | grep -qiE "invalid signature|not signed at all|code object i
   exit 1
 fi
 echo "Signature structure OK (trust errors are expected for the test certificate)."
+
+echo "::group::.p12 files with different encryptions"
+xcrun swiftc -O \
+  "$ROOT/Kiln/Signing/DER.swift" "$ROOT/Kiln/Signing/MachOSigner.swift" "$ROOT/Kiln/Signing/PKCS12.swift" \
+  "$ROOT/Toolchain/test/P12CLI/main.swift" -o "$WORK/p12test"
+OPENSSL3="$(brew --prefix openssl@3 2>/dev/null)/bin/openssl"
+[ -x "$OPENSSL3" ] || OPENSSL3=openssl
+"$OPENSSL3" version
+export_p12() { # name, extra options
+  "$OPENSSL3" pkcs12 -export -inkey "$WORK/key.pem" -in "$WORK/cert.pem" -passout pass:kiln-test \
+    -out "$WORK/$1.p12" "${@:2}"
+}
+export_p12 legacy-3des -legacy
+export_p12 legacy-rc2 -legacy -certpbe PBE-SHA1-RC2-40 -keypbe PBE-SHA1-3DES
+export_p12 aes256 -keypbe AES-256-CBC -certpbe AES-256-CBC -macalg sha256
+for name in legacy-3des legacy-rc2 aes256; do
+  echo "--- $name"
+  cp "$DYLIB" "$WORK/$name.dylib"
+  "$WORK/p12test" "$WORK/$name.p12" kiln-test "$WORK/$name.dylib"
+  python3 "$ROOT/Toolchain/test/extract-cms.py" "$WORK/$name.dylib" "$WORK/$name-cms.der" >/dev/null
+  openssl cms -verify -inform DER -in "$WORK/$name-cms.der" -binary -noverify -content "$WORK/cd.bin" -out /dev/null
+done
+echo "::endgroup::"

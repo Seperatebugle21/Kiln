@@ -65,6 +65,10 @@ enum SigningIdentityStore {
         var items: CFArray?
         let status = SecPKCS12Import(p12 as CFData, [kSecImportExportPassphrase as String: password] as CFDictionary, &items)
         if status == errSecAuthFailed { throw Failure.wrongPassword }
+        if status != errSecSuccess {
+            // iOS rejects some encryptions (errSecDecode); read the file with Kiln's own parser.
+            return try makeIdentityWithOwnParser(p12: p12, password: password, appleCertificates: appleCertificates)
+        }
         guard status == errSecSuccess,
               let entries = items as? [[String: Any]],
               let first = entries.first,
@@ -89,6 +93,29 @@ enum SigningIdentityStore {
         return Identity(
             privateKey: key,
             certificates: chain,
+            teamID: teamID,
+            name: leaf.commonName ?? "Certificate"
+        )
+    }
+
+    private static func makeIdentityWithOwnParser(p12: Data, password: String, appleCertificates: [[UInt8]]) throws -> Identity {
+        let contents = try PKCS12.parse(p12, password: password)
+        var error: Unmanaged<CFError>?
+        guard let key = SecKeyCreateWithData(contents.rsaPrivateKey as CFData, [
+            kSecAttrKeyType: kSecAttrKeyTypeRSA,
+            kSecAttrKeyClass: kSecAttrKeyClassPrivate,
+        ] as CFDictionary, &error) else {
+            throw PKCS12.Failure.malformed(error?.takeRetainedValue().localizedDescription ?? "private key")
+        }
+        let parsed = contents.certificates.compactMap { try? CertificateInfo(der: $0) }
+        // The leaf is the certificate that is not the issuer of another one in the file.
+        guard let leaf = parsed.first(where: { candidate in
+            !parsed.contains { $0.issuer == candidate.subject && $0.der != candidate.der }
+        }) ?? parsed.first else { throw PKCS12.Failure.malformed("no certificate") }
+        guard let teamID = leaf.organizationalUnit else { throw Failure.noTeamID }
+        return Identity(
+            privateKey: key,
+            certificates: buildChain(leaf: leaf, candidates: contents.certificates + appleCertificates),
             teamID: teamID,
             name: leaf.commonName ?? "Certificate"
         )
