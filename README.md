@@ -12,16 +12,17 @@ Kiln requires iOS or iPadOS 26.
 
 ## Status
 
-Kiln is in early development. The editor, project handling, Claude integration, syntax checking and
-the run pipeline are in place. The on-device Swift compiler is the next phase; until it is bundled,
-Run stops after the syntax check with a clear message. See
-[Documentation/ARCHITECTURE.md](Documentation/ARCHITECTURE.md) for how it works and the plan.
+Kiln compiles, links, signs and runs SwiftUI apps on the iPhone itself: the Swift compiler and lld
+run inside Kiln, the app is signed with your developer or enterprise certificate (Settings › Build)
+and loaded without JIT. Macros in your own code (`@Observable`, `#Preview`) are not supported yet.
+See [Documentation/ARCHITECTURE.md](Documentation/ARCHITECTURE.md) for how it works and the plan.
 
 ## Install
 
 1. Open the latest **Build Kiln** workflow run under Actions and download `Kiln-unsigned-ipa`.
 2. Sign and install `Kiln.ipa` with SideStore or your own development certificate.
-3. In Kiln, open Settings and add your Anthropic API key to use Claude.
+3. In Kiln, open Settings › Build and import the same .p12 certificate Kiln is signed with.
+4. Optionally add your Anthropic API key (Claude) or a GitHub token (sync) in Settings.
 
 ## Build from source
 
