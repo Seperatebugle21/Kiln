@@ -40,7 +40,7 @@ public struct GenerableMacro: MemberMacro, ExtensionMacro {
             let properties = storedProperties(structure.memberBlock)
             return [
                 DeclSyntax(stringLiteral: schema(properties: properties, description: description, access: access)),
-                DeclSyntax(stringLiteral: generatedContent(properties: properties, access: access)),
+                DeclSyntax(stringLiteral: generatedContent(properties: properties, explicitNil: representsNilExplicitly(node), access: access)),
                 DeclSyntax(stringLiteral: partiallyGenerated(properties: properties, access: access)),
             ]
         }
@@ -188,11 +188,11 @@ public struct GenerableMacro: MemberMacro, ExtensionMacro {
         """
     }
 
-    static func generatedContent(properties: [Property], access: String) -> String {
+    static func generatedContent(properties: [Property], explicitNil: Bool, access: String) -> String {
         let adds = properties.map { "    addProperty(name: \"\($0.name)\", value: self.\($0.name))" }.joined(separator: "\n")
         return """
         \(access)nonisolated var generatedContent: GeneratedContent {
-            let explicitNil = false
+            let explicitNil = \(explicitNil)
             var properties = [(name: String, value: any ConvertibleToGeneratedContent)]()
         \(adds)
             return GeneratedContent(
@@ -306,8 +306,8 @@ public struct GenerableMacro: MemberMacro, ExtensionMacro {
                 nonisolated init(_ content: \(module).GeneratedContent) throws {
             \(assignments)
                 }
-                \(schema(properties: properties, description: nil, access: "").replacingOccurrences(of: "\n", with: "\n    "))
-                \(generatedContent(properties: properties, access: "").replacingOccurrences(of: "\n", with: "\n    "))
+                \(indented(schema(properties: properties, description: nil, access: "")))
+                \(indented(generatedContent(properties: properties, explicitNil: false, access: "")))
             }
             """))
         }
@@ -360,6 +360,18 @@ public struct GenerableMacro: MemberMacro, ExtensionMacro {
     }
 
     // MARK: Helpers
+
+    /// Indents every line after the first by four spaces (no Foundation in compiler plug-ins).
+    static func indented(_ text: String) -> String {
+        text.split(separator: "\n", omittingEmptySubsequences: false).joined(separator: "\n    ")
+    }
+
+    /// `@Generable(representNilExplicitlyInGeneratedContent: true)`.
+    static func representsNilExplicitly(_ node: AttributeSyntax) -> Bool {
+        guard case .argumentList(let arguments)? = node.arguments else { return false }
+        return arguments.first { $0.label?.text == "representNilExplicitlyInGeneratedContent" }?
+            .expression.trimmedDescription == "true"
+    }
 
     static func capitalized(_ name: String) -> String {
         name.prefix(1).uppercased() + name.dropFirst()
