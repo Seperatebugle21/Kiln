@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import UIKit
 
 /// Runs a build: save, syntax check, entry point generation, then the backend.
 @MainActor
@@ -22,6 +23,9 @@ final class BuildCoordinator {
         guard phase != .building, project.root != nil else { return false }
         project.save()
         phase = .building
+        // Large builds (MLX has hundreds of C++ files) take a while; iOS stops them if the screen locks.
+        UIApplication.shared.isIdleTimerDisabled = true
+        defer { UIApplication.shared.isIdleTimerDisabled = false }
         log = []
         diagnostics = []
         product = nil
