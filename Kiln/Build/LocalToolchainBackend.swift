@@ -55,7 +55,10 @@ struct LocalToolchainBackend: BuildBackend {
         // Objective-C runtimes mix up their types, which crashed the second Run. Sources keep using
         // the plain names (`import Greeting`) through -module-alias.
         let buildTag = "_k" + String(UUID().uuidString.prefix(8)).lowercased()
-        let moduleName = Self.moduleName(for: request.projectName) + buildTag
+        // The app keeps its own module name (code may write `MyApp.Thing`); only its ABI name, used in
+        // symbol and runtime type names, carries the build tag.
+        let appModuleName = Self.moduleName(for: request.projectName)
+        let moduleName = appModuleName + buildTag
         let object = request.workDirectory.appendingPathComponent("\(moduleName).o")
         let dylib = request.workDirectory.appendingPathComponent("\(moduleName).dylib")
         let firstBuild = (try? fileManager.contentsOfDirectory(atPath: Self.moduleCacheURL.path))?.isEmpty ?? true
@@ -72,7 +75,6 @@ struct LocalToolchainBackend: BuildBackend {
             "-parse-as-library",
             "-Onone",
             "-module-cache-path", Self.moduleCacheURL.path,
-            "-I", cache.modules.path,
         ] + Self.macroPluginArguments()
         let clangCommon = [
             "-target", Self.target,
@@ -99,7 +101,8 @@ struct LocalToolchainBackend: BuildBackend {
         var clangImportFlags: [String] = []
         var clangHeaderPaths: [String] = []
         /// `-module-alias Name=Name_p…` for the Swift package modules built so far.
-        var moduleAliases: [String] = []
+        /// `-I <folder>` for each Swift package module built so far (each in a folder named by its hash).
+        var moduleSearchFlags: [String] = []
         var libraries: [URL] = []
         var packageLinkFlags: [String] = []
         var frameworkFlags: [String] = []
@@ -197,18 +200,25 @@ struct LocalToolchainBackend: BuildBackend {
                 }
                 // The module's real name includes a hash of its sources and settings, so an unchanged
                 // module is reused, and a changed one never clashes with the copy that is still loaded.
-                let settings = clangImportFlags + moduleAliases + module.swiftFlags + module.swiftDefines.flatMap { ["-D", $0] }
+                let packageFlags = module.packageName.map { ["-package-name", $0] } ?? []
+                let settings = clangImportFlags + moduleSearchFlags + packageFlags + module.swiftFlags + module.swiftDefines.flatMap { ["-D", $0] }
                 let key = cache.key([cache.fingerprint(moduleSources), module.name] + swiftCommon + settings)
-                let realName = "\(module.name)_p\(key)"
-                let output = cache.objects.appendingPathComponent("\(realName).o")
-                let interface = cache.modules.appendingPathComponent("\(realName).swiftmodule")
+                // The module keeps its name (its code and its clients write `MLX.…`); the ABI name, used in
+                // symbols and runtime type names, includes the hash, so a changed package never clashes
+                // with a copy that is still loaded.
+                let abiName = "\(module.name)_p\(key)"
+                let folder = cache.modules.appendingPathComponent("\(module.name)-\(key)", isDirectory: true)
+                try fileManager.createDirectory(at: folder, withIntermediateDirectories: true)
+                let output = cache.objects.appendingPathComponent("\(abiName).o")
+                let interface = folder.appendingPathComponent("\(module.name).swiftmodule")
                 if fileManager.fileExists(atPath: output.path), fileManager.fileExists(atPath: interface.path) {
                     reused += 1
                 } else {
                     log("Compiling \(module.name) (Swift, \(module.sources.count) file(s))…")
                     let partial = output.appendingPathExtension("partial")
                     let arguments = ["swift-frontend", "-frontend", "-c"] + moduleSources.map(\.path) + swiftCommon + settings
-                        + ["-module-name", realName, "-emit-module-path", interface.path, "-o", partial.path]
+                        + ["-module-name", module.name, "-module-abi-name", abiName,
+                           "-emit-module-path", interface.path, "-o", partial.path]
                     try await compileSwift(arguments, output: partial, sourceRoot: request.workDirectory, log: log)
                     try? fileManager.removeItem(at: output)
                     try fileManager.moveItem(at: partial, to: output)
@@ -216,7 +226,7 @@ struct LocalToolchainBackend: BuildBackend {
                     log(String(format: "  %@ done in %.1f s.", module.name, Date().timeIntervalSince(started)))
                 }
                 packageObjects.append(output)
-                moduleAliases += ["-module-alias", "\(module.name)=\(realName)"]
+                moduleSearchFlags += ["-I", folder.path]
             }
         }
         if reused > 0 {
@@ -263,9 +273,11 @@ struct LocalToolchainBackend: BuildBackend {
             sourcePaths.append(try resourceAccessor(name: bundleName, items: request.plan.appResources, in: cache.generated, log: log).path)
         }
         log("Compiling \(sourcePaths.count) app file(s)…")
-        let compileArguments = ["swift-frontend", "-frontend", "-c"] + sourcePaths + swiftCommon + clangImportFlags + moduleAliases
+        let appPackageFlags = request.plan.appPackageName.map { ["-package-name", $0] } ?? []
+        let compileArguments = ["swift-frontend", "-frontend", "-c"] + sourcePaths + swiftCommon + clangImportFlags + moduleSearchFlags
+            + appPackageFlags
             + request.plan.appSwiftFlags + bridgingFlags + [
-            "-module-name", moduleName,
+            "-module-name", appModuleName, "-module-abi-name", moduleName,
             "-o", object.path,
         ]
         let started = Date()

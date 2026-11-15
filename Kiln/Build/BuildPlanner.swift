@@ -16,6 +16,8 @@ struct BuildModule: Sendable {
     var defines: [String]
     var swiftDefines: [String]
     var dependencies: [String]
+    /// The package it belongs to, for Swift's `package` access level (-package-name).
+    var packageName: String?
     var swiftFlags: [String] = []
     var cFlags: [String] = []
     var linkFlags: [String] = []
@@ -49,6 +51,8 @@ struct BuildPlan: Sendable {
     var appLinkFlags: [String] = []
     var appResources: [ResourceItem] = []
     var appBundleName: String?
+    /// For an app that is a Swift package's executable target.
+    var appPackageName: String?
 }
 
 /// Reads a project (Swift package, Xcode project, XcodeGen project or plain folder) into a BuildPlan,
@@ -92,6 +96,7 @@ enum BuildPlanner {
             let otherTargets = manifest.targets.filter { $0.name != app.name }.map { targetDirectory($0, in: root) }
             plan.appSources = files(in: [directory], extensions: swiftExtensions, excluding: excluded(app, in: directory) + otherTargets)
             plan.appSwiftFlags = app.swiftFlags + app.swiftDefines.flatMap { ["-D", $0] }
+            plan.appPackageName = Self.packageName(package.identity)
             plan.appLinkFlags = app.linkFlags
             plan.appResources = resourceItems(app, in: directory)
             if !plan.appResources.isEmpty { plan.appBundleName = "\(manifest.name)_\(app.name)" }
@@ -196,6 +201,7 @@ enum BuildPlanner {
                 continue
             }
             if var module = module(for: target, in: package) {
+                module.packageName = Self.packageName(package.identity)
                 module.cStandard = package.manifest.cStandard
                 module.cxxStandard = package.manifest.cxxStandard
                 plan.modules.append(module)
@@ -402,6 +408,12 @@ enum BuildPlanner {
             }
         }
         return module
+    }
+
+    /// SwiftPM's -package-name: the package identity with characters other than letters, digits
+    /// and underscores replaced.
+    static func packageName(_ identity: String) -> String {
+        String(identity.map { $0.isLetter || $0.isNumber || $0 == "_" ? $0 : "_" })
     }
 
     private static func targetDirectory(_ target: PackageManifest.Target, in root: URL) -> URL {
