@@ -457,7 +457,7 @@ enum BuildPlanner {
         String(identity.map { $0.isLetter || $0.isNumber || $0 == "_" ? $0 : "_" })
     }
 
-    private static func targetDirectory(_ target: PackageManifest.Target, in root: URL) -> URL {
+    static func targetDirectory(_ target: PackageManifest.Target, in root: URL) -> URL {
         if let path = target.path { return root.appendingPathComponent(path).standardizedFileURL }
         let base = target.kind == .test ? ["Tests"] : ["Sources", "Source", "src", "srcs"]
         for folder in base {

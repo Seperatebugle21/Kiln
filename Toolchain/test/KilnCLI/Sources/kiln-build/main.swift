@@ -49,6 +49,16 @@ do {
 }
 plan.warnings.forEach(log)
 log("Packages: \(plan.modules.map(\.name).joined(separator: ", "))")
+// How Kiln reads mlx-swift's manifest: every target's folder and excludes under "mlx".
+let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("KilnPackages/mlx-swift")
+for version in (try? FileManager.default.contentsOfDirectory(at: caches, includingPropertiesForKeys: nil)) ?? [] {
+    guard let manifest = try? PackageManifest.load(from: version) else { continue }
+    for target in manifest.targets {
+        let directory = BuildPlanner.targetDirectory(target, in: version)
+        let mlxExcludes = target.exclude.filter { $0 == "mlx" || $0.hasPrefix("mlx/mlx") || $0.hasSuffix("/") || $0.isEmpty }
+        log("  [manifest] \(target.name) kind=\(target.kind) dir=\(directory.path.dropFirst(version.path.count)) excludes=\(target.exclude.count) sources=\(target.sources ?? []) mlx-related=\(mlxExcludes)")
+    }
+}
 // Where each C module's sources come from, to spot missing folders.
 for module in plan.modules where module.language == .clang && module.sources.count > 5 {
     var folders: [String: Int] = [:]
