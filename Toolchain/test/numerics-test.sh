@@ -32,7 +32,7 @@ build() { # <label> <real-name suffix> <use alias: yes/no>
   local ALIASES=()
   if [ "$ALIAS" = yes ]; then ALIASES=(-module-alias "RealModule=RealModule$SUFFIX"); fi
   "$FRONTEND" -frontend -c $(find "$SRC/ComplexModule" -name '*.swift') "${COMMON[@]}" -I "$OUT/Modules" \
-    "${ALIASES[@]}" -module-name "ComplexModule$SUFFIX" -emit-module-path "$OUT/Modules/ComplexModule$SUFFIX.swiftmodule" \
+    ${ALIASES[@]+"${ALIASES[@]}"} -module-name "ComplexModule$SUFFIX" -emit-module-path "$OUT/Modules/ComplexModule$SUFFIX.swiftmodule" \
     -o "$OUT/Complex.o"
   echo "RESULT $LABEL ComplexModule: exit $?"
   echo "::endgroup::"

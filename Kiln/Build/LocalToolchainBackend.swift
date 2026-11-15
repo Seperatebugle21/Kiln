@@ -486,7 +486,8 @@ struct LocalToolchainBackend: BuildBackend {
 
     /// The compiler writes diagnostics to stderr; route it to a file while it runs.
     static func capturingStandardError(_ body: () -> Int32) -> (Int32, String) {
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("kiln-compiler-\(UUID().uuidString).log")
+        // A fixed file that survives a crash: if the compiler aborts Kiln, the next build shows what it said.
+        let url = compilerLogURL
         FileManager.default.createFile(atPath: url.path, contents: nil)
         let file = open(url.path, O_WRONLY | O_TRUNC)
         guard file >= 0 else { return (body(), "") }
@@ -499,8 +500,11 @@ struct LocalToolchainBackend: BuildBackend {
         close(saved)
         close(file)
         let output = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
-        try? FileManager.default.removeItem(at: url)
         return (status, output)
+    }
+
+    static var compilerLogURL: URL {
+        FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("KilnLastCompilerOutput.log")
     }
 
     /// Parses `path:line:column: severity: message` lines into project-relative diagnostics.

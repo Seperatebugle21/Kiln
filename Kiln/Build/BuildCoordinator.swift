@@ -25,10 +25,14 @@ final class BuildCoordinator {
         phase = .building
         // Large builds (MLX has hundreds of C++ files) take a while; iOS stops them if the screen locks.
         UIApplication.shared.isIdleTimerDisabled = true
-        defer { UIApplication.shared.isIdleTimerDisabled = false }
+        defer {
+            UIApplication.shared.isIdleTimerDisabled = false
+            UserDefaults.standard.removeObject(forKey: Self.stepKey)
+        }
         log = []
         diagnostics = []
         product = nil
+        reportPreviousCrash()
         append("Building \(project.name) with \(backend.name)")
 
         // Work out the modules: package dependencies (downloaded if needed), then the app.
@@ -115,6 +119,24 @@ final class BuildCoordinator {
 
     private func append(_ line: String) {
         log.append(line)
+        if phase == .building {
+            UserDefaults.standard.set(line, forKey: Self.stepKey)
+        }
+    }
+
+    /// The last log line of a build in progress; still set at the next launch if Kiln crashed.
+    private static let stepKey = "kiln.buildStepInProgress"
+
+    /// If the previous build ended in a crash, shows where, and what the compiler said last.
+    private func reportPreviousCrash() {
+        guard let step = UserDefaults.standard.string(forKey: Self.stepKey) else { return }
+        UserDefaults.standard.removeObject(forKey: Self.stepKey)
+        log.append("⚠️ The previous build stopped Kiln during: \(step)")
+        let output = (try? String(contentsOf: LocalToolchainBackend.compilerLogURL, encoding: .utf8)) ?? ""
+        let lines = output.split(separator: "\n", omittingEmptySubsequences: false).suffix(60)
+        if !lines.joined().trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            log.append("Last compiler output before the crash:\n" + lines.joined(separator: "\n"))
+        }
     }
 
     private func fail(_ message: String) -> Bool {
