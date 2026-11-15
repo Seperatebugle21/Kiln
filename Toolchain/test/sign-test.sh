@@ -25,8 +25,14 @@ echo "::group::codesign -d"
 codesign -d --verbose=4 "$WORK/signed.dylib" 2>&1 | tee "$WORK/display.txt"
 echo "::endgroup::"
 grep -q "TeamIdentifier=KILNTEST01" "$WORK/display.txt"
-grep -q "Authority=Kiln Test Signer" "$WORK/display.txt"
 grep -q "Hash type=sha256" "$WORK/display.txt"
+
+# The CMS must parse: codesign extracts its certificates, which must be our test certificate.
+# (Authority shows "(unavailable)" for an untrusted, self-signed certificate.)
+codesign -d --extract-certificates="$WORK/extracted-" "$WORK/signed.dylib"
+ls -l "$WORK"/extracted-*
+cmp "$WORK/extracted-0" "$WORK/cert.der"
+echo "The CMS signature carries the test certificate."
 
 echo "::group::codesign --verify"
 VERIFY=$(codesign --verify --verbose=4 "$WORK/signed.dylib" 2>&1 || true)
