@@ -18,6 +18,9 @@ struct FileNode: Identifiable, Hashable {
         switch url.pathExtension.lowercased() {
         case "swiftpm": return "shippingbox"
         case "zip": return "doc.zipper"
+        case "xcodeproj", "xcworkspace": return "hammer"
+        case "xcassets": return "photo.on.rectangle"
+        case "pbxproj", "xcscheme", "xcworkspacedata": return "doc.badge.gearshape"
         default: break
         }
         if isDirectory { return "folder" }
@@ -95,8 +98,10 @@ final class ProjectStore {
         "build", ".build", "DerivedData", "xcuserdata", "Pods", "node_modules",
     ]
 
-    /// Bundles that are shown as one item instead of being expanded.
-    static let opaqueExtensions: Set<String> = ["xcodeproj", "xcworkspace", "xcassets", "xcframework"]
+    /// Bundles that are shown as one item instead of being expanded (prebuilt binaries).
+    /// Xcode projects, workspaces and asset catalogs open like folders, so project.pbxproj,
+    /// schemes and Contents.json can be read and edited.
+    static let opaqueExtensions: Set<String> = ["xcframework", "framework"]
 
     var name: String { root?.deletingPathExtension().lastPathComponent ?? "" }
 
