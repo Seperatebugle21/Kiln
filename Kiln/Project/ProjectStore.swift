@@ -112,8 +112,16 @@ final class ProjectStore {
         open(url, scope: nil)
     }
 
+    /// The name of the project being copied into Kiln, while that runs.
+    private(set) var importingName: String?
+
     /// Opens `url`. `scope` is a security-scoped folder that contains it and is already being accessed.
     private func open(_ url: URL, scope: URL?) {
+        // Projects from outside Kiln are copied into its Projects folder first, so they always reopen.
+        if let local = try? Self.localProjectsFolder(), !Self.path(url, isInside: local) {
+            importCopy(of: url, scope: scope, into: local)
+            return
+        }
         // A zipped project (a .swiftpm sent as one file): unpack it into Kiln's Projects folder first.
         if !Self.isDirectory(url) {
             scope?.stopAccessingSecurityScopedResource()
@@ -138,6 +146,26 @@ final class ProjectStore {
         reloadTree()
         if let main = ProjectDetector.preferredStartFile(in: swiftFiles()) {
             select(main)
+        }
+    }
+
+    private func importCopy(of url: URL, scope: URL?, into projects: URL) {
+        guard importingName == nil else { return }
+        let accessing = scope == nil && url.startAccessingSecurityScopedResource()
+        importingName = url.deletingPathExtension().lastPathComponent
+        Task {
+            let result = await Task.detached(priority: .userInitiated) {
+                Result { try ProjectImporter.importProject(url, into: projects) }
+            }.value
+            if accessing { url.stopAccessingSecurityScopedResource() }
+            scope?.stopAccessingSecurityScopedResource()
+            importingName = nil
+            switch result {
+            case .success(let copy):
+                open(copy, scope: nil)
+            case .failure(let error):
+                errorMessage = "Could not copy \(url.lastPathComponent) into Kiln: \(error.localizedDescription)"
+            }
         }
     }
 

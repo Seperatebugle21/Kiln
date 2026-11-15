@@ -47,7 +47,7 @@ struct WelcomeView: View {
                         Label("New Project…", systemImage: "plus.square.on.square")
                     }
                 } footer: {
-                    Text("Open a project folder, a .swiftpm package or an .xcodeproj from the Files app. For an Xcode project, picking the folder that contains it is quickest.")
+                    Text("Open a project folder, a .swiftpm package or an .xcodeproj from the Files app. Kiln copies it into its own folder (On My iPhone › Kiln › Projects). For an Xcode project, picking the folder that contains it is quickest.")
                 }
 
                 if !projects.recentProjects.isEmpty {
@@ -102,6 +102,22 @@ struct WelcomeView: View {
                 }
             }
             .navigationTitle("Kiln")
+            .overlay {
+                if let name = projects.importingName {
+                    VStack(spacing: 12) {
+                        ProgressView()
+                        Text("Copying \(name) into Kiln…")
+                            .font(.headline)
+                        Text("Kiln works on its own copy, so the project always reopens.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                    }
+                    .padding(24)
+                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 20))
+                    .padding(32)
+                }
+            }
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
