@@ -61,3 +61,30 @@ file "$WORK/HelloKiln.dylib"
 otool -L "$WORK/HelloKiln.dylib"
 nm -gU "$WORK/HelloKiln.dylib" | grep kiln_entry
 ls -lh "$WORK/HelloKiln.dylib"
+
+# Every Kiln build gives its modules unique names (Greeting_k1234) and keeps `import Greeting`
+# working through -module-alias, so a second Run loaded next to the first has distinct types.
+echo "::group::Per-build module names with -module-alias"
+ALIAS="$WORK/alias"
+mkdir -p "$ALIAS/Modules" "$ALIAS/src"
+cat > "$ALIAS/src/Greeting.swift" <<'SWIFT'
+public final class Greeter {
+    public init() {}
+    public var text: String { "Hello" }
+}
+SWIFT
+cat > "$ALIAS/src/App.swift" <<'SWIFT'
+import Greeting
+@_cdecl("alias_check") public func aliasCheck() -> Int { Greeter().text.count }
+SWIFT
+for TAG in _ka _kb; do
+  "$FRONTEND" -frontend -c "$ALIAS/src/Greeting.swift" -target "$TARGET" -sdk "$SDK" -parse-as-library -Onone \
+    -module-cache-path "$WORK/ModuleCache" -module-name "Greeting$TAG" \
+    -emit-module-path "$ALIAS/Modules/Greeting$TAG.swiftmodule" -o "$ALIAS/Greeting$TAG.o"
+  "$FRONTEND" -frontend -c "$ALIAS/src/App.swift" -target "$TARGET" -sdk "$SDK" -parse-as-library -Onone \
+    -module-cache-path "$WORK/ModuleCache" -I "$ALIAS/Modules" -module-alias "Greeting=Greeting$TAG" \
+    -module-name "App$TAG" -o "$ALIAS/App$TAG.o"
+  nm "$ALIAS/Greeting$TAG.o" | grep -q "8Greeting${TAG}7Greeter" || nm "$ALIAS/Greeting$TAG.o" | grep -q "Greeting$TAG"
+done
+echo "module-alias builds compiled for both tags"
+echo "::endgroup::"

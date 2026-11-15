@@ -50,7 +50,12 @@ struct LocalToolchainBackend: BuildBackend {
         }
         try fileManager.createDirectory(at: Self.moduleCacheURL, withIntermediateDirectories: true)
 
-        let moduleName = Self.moduleName(for: request.projectName)
+        // Every build gets its own module names. Kiln keeps earlier runs loaded (iOS cannot unload
+        // Swift code), and two loaded images with the same module and type names make the Swift and
+        // Objective-C runtimes mix up their types, which crashed the second Run. Sources keep using
+        // the plain names (`import Greeting`) through -module-alias.
+        let buildTag = "_k" + String(UUID().uuidString.prefix(8)).lowercased()
+        let moduleName = Self.moduleName(for: request.projectName) + buildTag
         let object = request.workDirectory.appendingPathComponent("\(moduleName).o")
         let dylib = request.workDirectory.appendingPathComponent("\(moduleName).dylib")
         let modulesDirectory = request.workDirectory.appendingPathComponent("Modules", isDirectory: true)
@@ -82,6 +87,8 @@ struct LocalToolchainBackend: BuildBackend {
         /// Module maps and header paths of the C modules built so far, for the modules that import them.
         var clangImportFlags: [String] = []
         var clangHeaderPaths: [String] = []
+        /// `-module-alias Name=Name_k…` for the Swift package modules built so far.
+        var moduleAliases: [String] = []
 
         // 1. Package modules, in dependency order.
         for module in request.plan.modules {
@@ -105,14 +112,17 @@ struct LocalToolchainBackend: BuildBackend {
                 }
             case .swift:
                 log("Compiling \(module.name) (Swift, \(module.sources.count) file(s))…")
-                let output = objectsDirectory.appendingPathComponent("\(module.name).o")
+                let realName = module.name + buildTag
+                let output = objectsDirectory.appendingPathComponent("\(realName).o")
                 let arguments = ["swift-frontend", "-frontend", "-c"] + module.sources.map(\.path) + swiftCommon + clangImportFlags
+                    + moduleAliases
                     + module.swiftDefines.flatMap { ["-D", $0] }
-                    + ["-module-name", module.name,
-                       "-emit-module-path", modulesDirectory.appendingPathComponent("\(module.name).swiftmodule").path,
+                    + ["-module-name", realName,
+                       "-emit-module-path", modulesDirectory.appendingPathComponent("\(realName).swiftmodule").path,
                        "-o", output.path]
                 try await compileSwift(arguments, output: output, sourceRoot: request.workDirectory, log: log)
                 objects.append(output)
+                moduleAliases += ["-module-alias", "\(module.name)=\(realName)"]
             }
             log(String(format: "  %@ done in %.1f s.", module.name, Date().timeIntervalSince(started)))
         }
@@ -131,7 +141,7 @@ struct LocalToolchainBackend: BuildBackend {
 
         // 3. The app.
         log("Compiling \(sourcePaths.count) app file(s)…")
-        let compileArguments = ["swift-frontend", "-frontend", "-c"] + sourcePaths + swiftCommon + clangImportFlags + bridgingFlags + [
+        let compileArguments = ["swift-frontend", "-frontend", "-c"] + sourcePaths + swiftCommon + clangImportFlags + moduleAliases + bridgingFlags + [
             "-module-name", moduleName,
             "-o", object.path,
         ]
