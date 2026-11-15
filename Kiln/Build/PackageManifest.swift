@@ -441,9 +441,36 @@ private final class ManifestReader {
     }
 
     /// The value of a plain string literal (interpolations are dropped), or of a string constant.
+    /// Escapes such as `\"` are decoded, as the compiler would (raw `#"…"#` strings are left as they are).
     private func string(_ expression: ExprSyntax?) -> String? {
         guard let literal = resolved(expression)?.as(StringLiteralExprSyntax.self) else { return nil }
-        return literal.segments.compactMap { $0.as(StringSegmentSyntax.self)?.content.text }.joined()
+        let text = literal.segments.compactMap { $0.as(StringSegmentSyntax.self)?.content.text }.joined()
+        return literal.openingPounds == nil ? Self.unescape(text) : text
+    }
+
+    static func unescape(_ text: String) -> String {
+        guard text.contains("\\") else { return text }
+        var result = ""
+        var iterator = text.makeIterator()
+        while let character = iterator.next() {
+            guard character == "\\", let next = iterator.next() else {
+                result.append(character)
+                continue
+            }
+            switch next {
+            case "n": result.append("\n")
+            case "t": result.append("\t")
+            case "r": result.append("\r")
+            case "0": result.append("\0")
+            case "u":
+                // \u{1F600}
+                var hex = ""
+                while let digit = iterator.next(), digit != "}" { if digit != "{" { hex.append(digit) } }
+                if let value = UInt32(hex, radix: 16), let scalar = Unicode.Scalar(value) { result.unicodeScalars.append(scalar) }
+            default: result.append(next) // \" \' \\
+            }
+        }
+        return result
     }
 }
 

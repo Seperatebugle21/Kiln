@@ -43,6 +43,8 @@ final class PackageResolver: @unchecked Sendable {
     private let token: String?
     private let log: @Sendable (String) -> Void
 
+    private static let completeMarker = ".kiln-complete-2"
+
     static var cacheRoot: URL {
         FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("KilnPackages", isDirectory: true)
@@ -70,9 +72,13 @@ final class PackageResolver: @unchecked Sendable {
             let root = Self.cacheRoot
                 .appendingPathComponent(dependency.identity, isDirectory: true)
                 .appendingPathComponent(revision.replacingOccurrences(of: "/", with: "_"), isDirectory: true)
-            if !FileManager.default.fileExists(atPath: root.appendingPathComponent("Package.swift").path) {
+            // The marker is written last, so an interrupted download (or one from an older Kiln
+            // that skipped submodules) is downloaded again.
+            let marker = root.appendingPathComponent(Self.completeMarker)
+            if !FileManager.default.fileExists(atPath: marker.path) {
                 log("Downloading \(owner)/\(repo) @ \(revision)…")
                 try await download(owner: owner, repo: repo, revision: revision, to: root)
+                FileManager.default.createFile(atPath: marker.path, contents: Data())
             }
             return try load(identity: dependency.identity, root: root)
         }
@@ -177,9 +183,89 @@ final class PackageResolver: @unchecked Sendable {
         let staging = root.deletingLastPathComponent().appendingPathComponent(".staging-\(UUID().uuidString)")
         try? FileManager.default.removeItem(at: staging)
         try TarGzip.extract(data, to: staging, stripComponents: 1)
+        // GitHub's tarballs leave git submodules empty (mlx-swift keeps mlx, mlx-c and fmt in them).
+        try await fetchSubmodules(in: staging, owner: owner, repo: repo, revision: revision, depth: 0)
         try? FileManager.default.removeItem(at: root)
         try FileManager.default.createDirectory(at: root.deletingLastPathComponent(), withIntermediateDirectories: true)
         try FileManager.default.moveItem(at: staging, to: root)
+    }
+
+    // MARK: Submodules
+
+    /// Downloads every git submodule listed in `.gitmodules` at the commit the parent repository
+    /// records for it (read from GitHub's contents API), into its folder.
+    private func fetchSubmodules(in folder: URL, owner: String, repo: String, revision: String, depth: Int) async throws {
+        let file = folder.appendingPathComponent(".gitmodules")
+        guard depth < 3, let text = try? String(contentsOf: file, encoding: .utf8) else { return }
+        for submodule in Self.parseGitModules(text) {
+            let target = folder.appendingPathComponent(submodule.path)
+            if let existing = try? FileManager.default.contentsOfDirectory(atPath: target.path), !existing.isEmpty { continue }
+            let url = Self.resolveSubmoduleURL(submodule.url, owner: owner, repo: repo)
+            guard let child = Self.gitHubRepository(url) else {
+                log("\(repo): submodule \(submodule.path) is not on GitHub (\(url)); left empty.")
+                continue
+            }
+            guard let commit = try await submoduleCommit(owner: owner, repo: repo, path: submodule.path, revision: revision) else {
+                log("\(repo): could not find the commit of submodule \(submodule.path); left empty.")
+                continue
+            }
+            log("Downloading submodule \(submodule.path) (\(child.owner)/\(child.repo) @ \(commit.prefix(7)))…")
+            let archive = URL(string: "https://codeload.github.com/\(child.owner)/\(child.repo)/tar.gz/\(commit)")!
+            let (data, response) = try await URLSession.shared.data(from: archive)
+            let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+            guard status == 200 else { throw Failure.download("\(repo)/\(submodule.path)", status) }
+            try? FileManager.default.removeItem(at: target)
+            try TarGzip.extract(data, to: target, stripComponents: 1)
+            try await fetchSubmodules(in: target, owner: child.owner, repo: child.repo, revision: commit, depth: depth + 1)
+        }
+    }
+
+    private func submoduleCommit(owner: String, repo: String, path: String, revision: String) async throws -> String? {
+        let encodedPath = path.split(separator: "/").map { $0.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? String($0) }
+            .joined(separator: "/")
+        guard let url = URL(string: "https://api.github.com/repos/\(owner)/\(repo)/contents/\(encodedPath)?ref=\(revision)") else { return nil }
+        var request = URLRequest(url: url)
+        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        if let token, !token.isEmpty { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard (response as? HTTPURLResponse)?.statusCode == 200,
+              let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return nil }
+        return json["sha"] as? String
+    }
+
+    static func parseGitModules(_ text: String) -> [(path: String, url: String)] {
+        var result: [(path: String, url: String)] = []
+        var path: String?
+        var url: String?
+        func flush() {
+            if let path, let url { result.append((path, url)) }
+            path = nil
+            url = nil
+        }
+        for line in text.components(separatedBy: .newlines) {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("[") {
+                flush()
+                continue
+            }
+            let parts = trimmed.split(separator: "=", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
+            guard parts.count == 2 else { continue }
+            if parts[0] == "path" { path = parts[1] }
+            if parts[0] == "url" { url = parts[1] }
+        }
+        flush()
+        return result
+    }
+
+    /// `../mlx.git` is relative to the parent repository's URL.
+    static func resolveSubmoduleURL(_ url: String, owner: String, repo: String) -> String {
+        guard url.hasPrefix("../") || url.hasPrefix("./") else { return url }
+        var components = ["github.com", owner, repo]
+        for part in url.split(separator: "/") {
+            if part == ".." { components.removeLast() } else if part != "." { components.append(String(part)) }
+        }
+        return "https://" + components.joined(separator: "/")
     }
 
     // MARK: Binary targets

@@ -258,7 +258,7 @@ struct LocalToolchainBackend: BuildBackend {
         }
         let diagnostics = Self.parseDiagnostics(text, sourceRoot: sourceRoot)
         if status != 0 || !FileManager.default.fileExists(atPath: output.path) {
-            if diagnostics.isEmpty {
+            if !diagnostics.contains(where: { $0.severity == .error }) {
                 log(text.isEmpty ? "The compiler failed with status \(status)." : text)
                 throw BuildError.failed("The compiler failed with status \(status).")
             }
@@ -293,7 +293,7 @@ struct LocalToolchainBackend: BuildBackend {
         }
         let diagnostics = Self.parseDiagnostics(text, sourceRoot: source.deletingLastPathComponent())
         if status != 0 || !FileManager.default.fileExists(atPath: output.path) {
-            if diagnostics.isEmpty {
+            if !diagnostics.contains(where: { $0.severity == .error }) {
                 log(text.isEmpty ? "clang failed with status \(status) on \(source.lastPathComponent)." : text)
                 throw BuildError.failed("Compiling \(source.lastPathComponent) failed.")
             }
@@ -446,7 +446,7 @@ struct LocalToolchainBackend: BuildBackend {
             else { continue }
             let severity: BuildDiagnostic.Severity
             switch parts[3].trimmingCharacters(in: .whitespaces) {
-            case "error": severity = .error
+            case "error", "fatal error": severity = .error
             case "warning": severity = .warning
             case "note": severity = .note
             default: continue
