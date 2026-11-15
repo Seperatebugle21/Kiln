@@ -9,8 +9,8 @@ import Foundation
 ///   lib/libclang_rt.ios.a   Clang's runtime helpers (for example #available checks)
 ///
 /// Pipeline: swift-frontend in frontend mode (whole module) → object file → lld → dylib.
-/// The dylib is ad-hoc signed for now, which iOS only loads while JIT (a debugger) is enabled;
-/// signing with the developer certificate comes next.
+/// The dylib is then signed with the certificate imported in Settings (MachOSigner), because iOS only
+/// loads code signed by the same team as Kiln.
 struct LocalToolchainBackend: BuildBackend {
     let name = "On-device compiler"
 
@@ -114,6 +114,15 @@ struct LocalToolchainBackend: BuildBackend {
         }
         guard linkStatus == 0, fileManager.fileExists(atPath: dylib.path) else {
             throw BuildError.failed("Linking failed.")
+        }
+
+        // 3. Sign with the certificate from Settings, so iOS accepts it without JIT.
+        if let identity = try SigningIdentityStore.load(appleCertificates: SigningIdentityStore.bundledAppleCertificates()) {
+            log("Signing with \(identity.name) (\(identity.teamID))…")
+            let signer = MachOSigner(privateKey: identity.privateKey, certificates: identity.certificates, teamID: identity.teamID)
+            try signer.sign(fileAt: dylib, identifier: "app.kiln.build.\(moduleName)")
+        } else {
+            log("No signing certificate in Settings: the app is ad-hoc signed, which iOS rejects unless code signing checks are bypassed.")
         }
         return BuildProduct(dylib: dylib)
     }

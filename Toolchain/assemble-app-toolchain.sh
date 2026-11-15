@@ -37,6 +37,17 @@ cp -R "$SWIFT/resources" "$OUT/resources"
 cp "$OUT/resources/shims/parent.modulemap" "$OUT/resources/module.modulemap"
 ls "$OUT/resources"
 cp "$(xcrun --sdk iphoneos clang -print-resource-dir)/lib/darwin/libclang_rt.ios.a" "$OUT/lib/"
+
+# Apple's public intermediate and root certificates, to complete the signing chain when a .p12
+# holds only the leaf certificate (Kiln picks the ones that match by issuer).
+mkdir -p "$OUT/certs"
+for cert in certificateauthority/AppleWWDRCAG3.cer certificateauthority/AppleWWDRCAG4.cer \
+            certificateauthority/AppleWWDRCAG5.cer certificateauthority/AppleWWDRCAG6.cer \
+            certificateauthority/AppleRootCA-G3.cer appleca/AppleIncRootCertificate.cer; do
+  curl -sfL "https://www.apple.com/$cert" -o "$OUT/certs/$(basename "$cert")" \
+    || echo "::warning::Could not download $cert"
+done
+ls -l "$OUT/certs"
 du -sh "$OUT"
 
 # Link flags: every static library of Swift, then LLVM/Clang/lld (ld64 resolves archives in any order).

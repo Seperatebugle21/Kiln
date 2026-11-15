@@ -11,9 +11,8 @@ enum AppRunner {
         var errorDescription: String? {
             switch self {
             case .load(let reason):
-                // Until Kiln signs with the developer certificate, built apps are ad-hoc signed,
-                // which iOS only accepts while a debugger (JIT) is attached.
-                return "Could not load the app: \(reason)\n\nKiln signs built apps ad hoc for now. Enable JIT for Kiln (for example with StikDebug) and press Run again."
+                // iOS loads only code signed by the same team as Kiln.
+                return "Could not load the app: \(reason)\n\nIf this mentions the code signature: import the certificate Kiln itself is signed with under Settings › Build, then press Run again."
             case .missingEntry: return "The built app does not export \(EntryPointGenerator.entrySymbol)."
             }
         }

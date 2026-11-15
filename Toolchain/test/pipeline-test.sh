@@ -50,6 +50,7 @@ echo "::group::Link"
   -syslibroot "$SDK" \
   -L "$SDK/usr/lib/swift" \
   -install_name @rpath/HelloKiln.dylib \
+  -adhoc_codesign \
   -lSystem \
   "$WORK/HelloKiln.o" \
   "$BUILTINS" \

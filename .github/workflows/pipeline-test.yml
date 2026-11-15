@@ -12,6 +12,7 @@ on:
     paths:
       - ".github/workflows/pipeline-test.yml"
       - "Toolchain/test/**"
+      - "Kiln/Signing/**"
 
 jobs:
   pipeline:
@@ -50,6 +51,9 @@ jobs:
       - name: Compile and link HelloKiln for iOS
         run: Toolchain/test/pipeline-test.sh "$TOOLCHAIN/usr/bin/swift-frontend" "$LLD" "$RUNNER_TEMP/pipeline"
 
+      - name: Sign HelloKiln with Kiln's signer
+        run: Toolchain/test/sign-test.sh "$RUNNER_TEMP/pipeline/HelloKiln.dylib" "$RUNNER_TEMP/signing"
+
       - name: Upload result
         if: always()
         uses: actions/upload-artifact@v4
@@ -58,5 +62,6 @@ jobs:
           path: |
             ${{ runner.temp }}/pipeline/HelloKiln.dylib
             ${{ runner.temp }}/pipeline/HelloKiln.o
+            ${{ runner.temp }}/signing/signed.dylib
           if-no-files-found: ignore
           retention-days: 7

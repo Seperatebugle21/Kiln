@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct SettingsView: View {
     @Environment(AssistantSession.self) private var session
@@ -10,6 +11,10 @@ struct SettingsView: View {
     @AppStorage(AssistantSession.autoApplyKey) private var autoApply = false
     @State private var apiKey = ""
     @State private var githubToken = ""
+    @State private var signingSummary: String?
+    @State private var pendingCertificate: Data?
+    @State private var certificatePassword = ""
+    @State private var signingError: String?
 
     var body: some View {
         NavigationStack {
@@ -59,13 +64,51 @@ struct SettingsView: View {
                 }
 
                 Section {
-                    LabeledContent("Compiler", value: LocalToolchainBackend.isInstalled ? "Installed" : "Not bundled yet")
-                    LabeledContent("Signing", value: "Coming with the compiler")
+                    LabeledContent("Compiler", value: LocalToolchainBackend.isInstalled ? "Installed" : "Not included")
+                    if let signingSummary {
+                        LabeledContent("Certificate", value: signingSummary)
+                        Button("Remove Certificate", role: .destructive) {
+                            SigningIdentityStore.remove()
+                            self.signingSummary = nil
+                        }
+                    } else {
+                        Button("Import Signing Certificate (.p12)…") {
+                            DocumentPicker.present(contentTypes: [.pkcs12]) { url in
+                                let accessing = url.startAccessingSecurityScopedResource()
+                                defer { if accessing { url.stopAccessingSecurityScopedResource() } }
+                                if let data = try? Data(contentsOf: url) {
+                                    certificatePassword = ""
+                                    pendingCertificate = data
+                                } else {
+                                    signingError = "Could not read \(url.lastPathComponent)."
+                                }
+                            }
+                        }
+                    }
                 } header: {
                     Text("Build")
                 } footer: {
-                    Text("Kiln compiles on this device with a bundled Swift toolchain and signs the result with your development certificate.")
+                    Text("Kiln signs the apps it builds with this certificate, so iOS loads them without JIT. Use the same certificate (developer or enterprise) that Kiln itself is signed with; the Team IDs must match. Stored in the Keychain.")
                 }
+            }
+            .onAppear(perform: loadSigningSummary)
+            .alert(
+                "Certificate Password",
+                isPresented: Binding(get: { pendingCertificate != nil }, set: { if !$0 { pendingCertificate = nil } })
+            ) {
+                SecureField("Password", text: $certificatePassword)
+                Button("Import") { importCertificate() }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("Enter the password of the .p12 file.")
+            }
+            .alert(
+                "Signing Certificate",
+                isPresented: Binding(get: { signingError != nil }, set: { if !$0 { signingError = nil } })
+            ) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(signingError ?? "")
             }
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)
@@ -79,5 +122,30 @@ struct SettingsView: View {
                 }
             }
         }
+    }
+
+    private func loadSigningSummary() {
+        guard SigningIdentityStore.isConfigured else { signingSummary = nil; return }
+        if let identity = try? SigningIdentityStore.load(appleCertificates: SigningIdentityStore.bundledAppleCertificates()) {
+            signingSummary = "\(identity.name) (\(identity.teamID))"
+        } else {
+            signingSummary = "Saved, but it could not be read"
+        }
+    }
+
+    private func importCertificate() {
+        guard let data = pendingCertificate else { return }
+        pendingCertificate = nil
+        do {
+            let identity = try SigningIdentityStore.save(
+                p12: data,
+                password: certificatePassword,
+                appleCertificates: SigningIdentityStore.bundledAppleCertificates()
+            )
+            signingSummary = "\(identity.name) (\(identity.teamID))"
+        } catch {
+            signingError = error.localizedDescription
+        }
+        certificatePassword = ""
     }
 }
