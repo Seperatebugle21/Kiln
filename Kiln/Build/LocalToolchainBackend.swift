@@ -103,6 +103,9 @@ struct LocalToolchainBackend: BuildBackend {
             "-parse-as-library",
             "-Onone",
             "-module-cache-path", Self.moduleCacheURL.path,
+            // Like Xcode: importing SwiftUI and PhotosUI (or MapKit, AVKit, …) together loads their
+            // cross-import overlay, where PhotosPicker, Map and VideoPlayer live.
+            "-enable-cross-import-overlays",
         ] + pluginArguments
         let clangCommon = [
             "-target", Self.target,

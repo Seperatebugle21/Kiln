@@ -69,7 +69,9 @@ jobs:
         env:
           KILN_GITHUB_TOKEN: ${{ github.token }}
         run: |
-          XCODE_TOOLCHAIN="$(dirname "$(dirname "$(xcrun --find swift)")")"
+          # …/XcodeDefault.xctoolchain (swift is in its usr/bin).
+          XCODE_TOOLCHAIN="$(dirname "$(dirname "$(dirname "$(xcrun --find swift)")")")"
+          ls "$XCODE_TOOLCHAIN/usr/lib/swift/host/plugins" | head -40
           export KILN_SWIFT_FRONTEND="$TOOLCHAIN/usr/bin/swift-frontend"
           export KILN_SWIFT_RESOURCES="$TOOLCHAIN/usr/lib/swift"
           export KILN_LLD="$LLD"
