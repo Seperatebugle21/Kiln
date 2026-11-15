@@ -71,5 +71,6 @@ targets:
           [ -d "$SOURCE" ] || exit 0
           DEST="$TARGET_BUILD_DIR/$FRAMEWORKS_FOLDER_PATH"
           mkdir -p "$DEST"
-          cp -f "$SOURCE"/*.dylib "$DEST/"
+          # Empty when the toolchain was built without swift-syntax.
+          find "$SOURCE" -maxdepth 1 -name '*.dylib' -exec cp -f {} "$DEST/" \;
     scheme: {}
