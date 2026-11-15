@@ -1,7 +1,7 @@
 #!/bin/bash
 # Prepares what the Kiln app needs for on-device builds, from the Toolchain workflow's artifacts:
 #   build/ToolchainBundle/Toolchain/     copied into Kiln.app as "Toolchain"
-#     SDK/iPhoneOS.sdk                   the iOS SDK without documentation
+#     iPhoneOS.sdk.aar                   the iOS SDK without documentation, as an Apple Archive
 #     resources/                         the compiler's resource directory (Clang headers, Swift shims)
 #     lib/libclang_rt.ios.a              Clang's runtime helpers
 #   Configuration/Toolchain.generated.xcconfig   header paths and libraries for KilnToolchainBridge.cpp
@@ -14,17 +14,21 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 OUT="$ROOT/build/ToolchainBundle/Toolchain"
 SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
 
-rm -rf "$OUT"
-mkdir -p "$OUT/SDK/iPhoneOS.sdk" "$OUT/lib"
+rm -rf "$OUT" "$ROOT/build/SDKStaging"
+mkdir -p "$OUT/lib" "$ROOT/build/SDKStaging/iPhoneOS.sdk"
 
 echo "::group::SDK"
 rsync -a \
   --exclude='*.swiftdoc' --exclude='*.swiftsourceinfo' --exclude='*.docc' --exclude='Documentation' \
   "$SDK/usr" "$SDK/System" "$SDK/SDKSettings.json" "$SDK/SDKSettings.plist" \
-  "$OUT/SDK/iPhoneOS.sdk/"
-# Absolute symlinks would point outside the app bundle.
-find "$OUT/SDK" -type l -lname '/*' -print -delete
-du -sh "$OUT/SDK"
+  "$ROOT/build/SDKStaging/iPhoneOS.sdk/"
+find "$ROOT/build/SDKStaging" -type l -lname '/*' -print -delete
+du -sh "$ROOT/build/SDKStaging"
+# Ship the SDK as one Apple Archive that Kiln extracts on first use. As a folder, its hundreds of
+# .framework directories (headers and .tbd stubs, no binaries) look like bundles to signers such
+# as Feather/zsign, which then fail trying to sign them.
+aa archive -d "$ROOT/build/SDKStaging" -o "$OUT/iPhoneOS.sdk.aar" -a lzfse
+ls -lh "$OUT/iPhoneOS.sdk.aar"
 echo "::endgroup::"
 
 cp -R "$SWIFT/resources" "$OUT/resources"

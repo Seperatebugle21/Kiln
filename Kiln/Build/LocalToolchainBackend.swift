@@ -4,7 +4,7 @@ import Foundation
 /// Compiles on the device with the Swift compiler and lld linked into Kiln.
 ///
 /// The bundled `Toolchain/` folder holds what the compiler reads:
-///   SDK/iPhoneOS.sdk        Swift interfaces, headers and .tbd stubs of the iOS SDK
+///   iPhoneOS.sdk.aar        the iOS SDK (Swift interfaces, headers, .tbd stubs), unpacked on first use
 ///   resources/              the compiler's resource directory (Clang headers, Swift shims)
 ///   lib/libclang_rt.ios.a   Clang's runtime helpers (for example #available checks)
 ///
@@ -34,7 +34,7 @@ struct LocalToolchainBackend: BuildBackend {
         guard kiln_toolchain_available() == 1, let toolchain = Self.toolchainURL else {
             throw BuildError.backendUnavailable("This build of Kiln does not include the on-device compiler.")
         }
-        let sdk = toolchain.appendingPathComponent("SDK/iPhoneOS.sdk")
+        let sdk = try SDKInstaller.sdk(in: toolchain, log: log)
         let resources = toolchain.appendingPathComponent("resources")
         let builtins = toolchain.appendingPathComponent("lib/libclang_rt.ios.a")
         let fileManager = FileManager.default
