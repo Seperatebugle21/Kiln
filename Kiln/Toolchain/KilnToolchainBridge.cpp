@@ -13,7 +13,13 @@
 
 #include "lld/Common/Driver.h"
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/Support/LLVMDriver.h"
 #include "llvm/Support/raw_ostream.h"
+
+#if KILN_HAS_CLANG_DRIVER
+// From clang/tools/driver/driver.cpp, archived as libKilnClangDriver.a.
+int clang_main(int Argc, char **Argv, const llvm::ToolContext &ToolContext);
+#endif
 
 LLD_HAS_DRIVER(macho)
 
@@ -25,6 +31,17 @@ int kiln_toolchain_available(void) { return 1; }
 
 int kiln_swift_frontend(int argc, const char **argv) {
     return swift::mainEntry(argc, argv);
+}
+
+int kiln_clang(int argc, const char **argv) {
+#if KILN_HAS_CLANG_DRIVER
+    llvm::ToolContext context{argv[0], nullptr, false};
+    return clang_main(argc, const_cast<char **>(argv), context);
+#else
+    (void)argc;
+    (void)argv;
+    return -1;
+#endif
 }
 
 int kiln_lld_link(int argc, const char **argv, char **output) {
@@ -44,6 +61,8 @@ int kiln_lld_link(int argc, const char **argv, char **output) {
 int kiln_toolchain_available(void) { return 0; }
 
 int kiln_swift_frontend(int, const char **) { return -1; }
+
+int kiln_clang(int, const char **) { return -1; }
 
 int kiln_lld_link(int, const char **, char **output) {
     if (output) {

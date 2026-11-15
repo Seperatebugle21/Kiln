@@ -105,5 +105,17 @@ echo "::endgroup::"
 mkdir -p "$INSTALL/clang-resources"
 cp -R "$WORK/ios"/lib/clang/*/include "$INSTALL/clang-resources/include"
 
+echo "::group::Clang driver"
+# clang_main (tools/driver) runs cc1 in-process by default (-fintegrated-cc1), so Kiln can call it to
+# compile C, C++ and Objective-C files without starting a process. Archive its objects, without the
+# generated file that holds main().
+DRIVER_OBJECTS=($(ninja -C "$WORK/ios" -t targets all \
+  | sed -n 's#^\(tools/clang/tools/driver/CMakeFiles/clang.dir/[^:]*\.o\):.*#\1#p' \
+  | grep -v 'clang-driver.cpp.o' | sort -u))
+echo "Driver objects: ${DRIVER_OBJECTS[*]}"
+ninja -C "$WORK/ios" "${DRIVER_OBJECTS[@]}"
+(cd "$WORK/ios" && xcrun ar rcs "$INSTALL/lib/libKilnClangDriver.a" "${DRIVER_OBJECTS[@]}")
+echo "::endgroup::"
+
 echo "Libraries: $(ls "$INSTALL"/lib/*.a | wc -l)"
 du -sh "$INSTALL"

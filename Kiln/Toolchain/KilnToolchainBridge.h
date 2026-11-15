@@ -17,6 +17,10 @@ int kiln_swift_frontend(int argc, const char *_Nonnull *_Nonnull argv);
 /// Writes the linker's messages to *output (free it with free()).
 int kiln_lld_link(int argc, const char *_Nonnull *_Nonnull argv, char *_Nullable *_Nullable output);
 
+/// Runs the clang driver in-process, like `clang <arguments>` (argv[0] is the program name).
+/// Use it for compiling only (-c); cc1 runs in the same process. Diagnostics go to stderr.
+int kiln_clang(int argc, const char *_Nonnull *_Nonnull argv);
+
 #ifdef __cplusplus
 }
 #endif
