@@ -87,6 +87,7 @@ enum TarGzip {
         let fileManager = FileManager.default
         var offset = 0
         var longName: String?
+        var longLink: String?
 
         func field(_ start: Int, _ length: Int) -> String {
             let slice = bytes[(offset + start)..<(offset + start + length)]
@@ -103,6 +104,8 @@ enum TarGzip {
             if !prefix.isEmpty, field(257, 5) == "ustar" { name = prefix + "/" + name }
             let size = octal(124, 12)
             let type = bytes[offset + 156]
+            // Read before `offset` moves on to the next header.
+            var linkTarget = field(157, 100)
             let contentStart = offset + 512
             guard contentStart + size <= bytes.count else { throw Failure.corrupt("truncated entry") }
             let content = bytes[contentStart..<(contentStart + size)]
@@ -117,6 +120,9 @@ enum TarGzip {
                     if let range = record.range(of: " path=") {
                         longName = String(record[range.upperBound...])
                     }
+                    if let range = record.range(of: " linkpath=") {
+                        longLink = String(record[range.upperBound...])
+                    }
                 }
                 continue
             case UInt8(ascii: "g"): // PAX global header (GitHub puts the commit here)
@@ -127,6 +133,10 @@ enum TarGzip {
             if let override = longName {
                 name = override
                 longName = nil
+            }
+            if let override = longLink {
+                linkTarget = override
+                longLink = nil
             }
 
             let components = name.split(separator: "/").dropFirst(stripComponents)
@@ -140,7 +150,6 @@ enum TarGzip {
                 try fileManager.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
                 try Data(content).write(to: target)
             case UInt8(ascii: "2"):
-                let linkTarget = field(157, 100)
                 try fileManager.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
                 try? fileManager.removeItem(at: target)
                 try? fileManager.createSymbolicLink(atPath: target.path, withDestinationPath: linkTarget)
