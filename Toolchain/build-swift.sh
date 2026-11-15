@@ -2,17 +2,18 @@
 # Builds the Swift compiler (swift-frontend and its driver) as static libraries for iOS (arm64),
 # against the LLVM/Clang build from build-llvm.sh.
 #
-# This first version leaves out the parts of the compiler written in Swift (SWIFT_ENABLE_SWIFT_IN_SWIFT=OFF):
-# they would need a second, cross-compiled Swift toolchain. Without them, macros and a few
-# optimizer passes are unavailable; plain Swift and SwiftUI code compiles.
+# The parts of the compiler written in Swift (the new optimizer passes and swift-syntax, which
+# macros need, even to read the iOS SDK's interfaces) are compiled for iOS with Xcode's swiftc
+# (BOOTSTRAPPING_MODE=HOSTTOOLS). swift-syntax is built as dylibs (_Compiler*.dylib) that Kiln embeds.
 #
-# Usage: Toolchain/build-swift.sh <swift checkout> <swift-cmark checkout> <llvm work dir> <work dir>
+# Usage: Toolchain/build-swift.sh <swift checkout> <swift-cmark checkout> <swift-syntax checkout> <llvm work dir> <work dir>
 set -euo pipefail
 
 SWIFT_SRC="$(cd "$1" && pwd)"
 CMARK_SRC="$(cd "$2" && pwd)"
-LLVM_WORK="$(cd "$3" && pwd)"
-WORK="$(mkdir -p "$4" && cd "$4" && pwd)"
+SYNTAX_SRC="$(cd "$3" && pwd)"
+LLVM_WORK="$(cd "$4" && pwd)"
+WORK="$(mkdir -p "$5" && cd "$5" && pwd)"
 IOS_SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
 DEPLOYMENT_TARGET="26.0"
 LAUNCHER=()
@@ -95,20 +96,20 @@ cmake -S "$SWIFT_SRC" -B "$WORK/swift" "${SWIFT_IOS[@]}" \
   -DSWIFT_INCLUDE_TESTS=OFF \
   -DSWIFT_INCLUDE_TEST_BINARIES=OFF \
   -DSWIFT_INCLUDE_DOCS=OFF \
-  -DSWIFT_ENABLE_SWIFT_IN_SWIFT=OFF \
-  -DSWIFT_BUILD_SWIFT_SYNTAX=OFF
+  -DSWIFT_ENABLE_SWIFT_IN_SWIFT=ON \
+  -DBOOTSTRAPPING_MODE=HOSTTOOLS \
+  -DSWIFT_BUILD_SWIFT_SYNTAX=ON \
+  -DSWIFT_PATH_TO_SWIFT_SYNTAX_SOURCE="$SYNTAX_SRC"
 echo "::endgroup::"
 
 echo "::group::Build Swift compiler libraries for iOS"
 LIBRARIES=($(ninja -C "$WORK/swift" -t targets all | sed -n 's#^\(lib/lib[^:]*\.a\):.*#\1#p' | sort -u))
 echo "Building ${#LIBRARIES[@]} libraries"
 ninja -C "$WORK/swift" "${LIBRARIES[@]}"
-# Without the Swift-written parts, initializeSwiftModules() comes from a stub that CMake builds as an
-# object library (no .a), so archive it ourselves.
-ninja -C "$WORK/swift" swiftCompilerStub
-STUB_OBJECTS=($(find "$WORK/swift/SwiftCompilerSources" -path '*swiftCompilerStub.dir*' -name '*.o'))
-test ${#STUB_OBJECTS[@]} -gt 0 || { echo "swiftCompilerStub objects not found"; exit 1; }
-xcrun ar rcs "$WORK/swift/lib/libswiftCompilerStub.a" "${STUB_OBJECTS[@]}"
+# swift-syntax for the compiler: shared libraries under lib/swift/host/compiler.
+SYNTAX_TARGETS=($(ninja -C "$WORK/swift" -t targets all | sed -n 's#^\(lib/swift/host/compiler/[^:]*\.dylib\):.*#\1#p' | sort -u))
+echo "swift-syntax libraries: ${SYNTAX_TARGETS[*]}"
+ninja -C "$WORK/swift" "${SYNTAX_TARGETS[@]}"
 echo "::endgroup::"
 
 echo "::group::Collect"
@@ -116,6 +117,10 @@ INSTALL="$WORK/install"
 rm -rf "$INSTALL"
 mkdir -p "$INSTALL/lib" "$INSTALL/include"
 cp "$WORK/swift"/lib/*.a "$INSTALL/lib/"
+mkdir -p "$INSTALL/lib/host"
+cp "$WORK/swift"/lib/swift/host/compiler/*.dylib "$INSTALL/lib/host/"
+ls -l "$INSTALL/lib/host"
+otool -L "$INSTALL/lib/host/lib_CompilerSwiftSyntax.dylib" || true
 cp "$WORK/cmark-install"/lib/*.a "$INSTALL/lib/"
 for dir in "$SWIFT_SRC/include" "$WORK/swift/include"; do
   rsync -a --include='*/' --include='*.h' --include='*.def' --include='*.inc' --exclude='*' "$dir/" "$INSTALL/include/"

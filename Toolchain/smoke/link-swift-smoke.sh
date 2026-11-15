@@ -12,6 +12,9 @@ xcrun --sdk iphoneos clang++ -std=c++17 -target arm64-apple-ios26.0 -isysroot "$
   -fno-rtti -dynamiclib -O1 \
   "$HERE/SwiftSmoke.cpp" \
   "$SWIFT"/lib/*.a "$LLVM"/lib/*.a \
+  -L "$SWIFT/lib/host" -L "$SDK/usr/lib/swift" \
+  -L "$(dirname "$(xcrun -f swiftc)")/../lib/swift/iphoneos" \
+  -Wl,-rpath,@executable_path/Frameworks \
   -o "$OUT" 2>&1 | tee "$OUT.link.log" | tail -80
 test -f "$OUT"
 

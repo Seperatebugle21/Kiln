@@ -100,11 +100,11 @@ jobs:
 
       # Stage 2: the Swift compiler.
 
-      - name: Fetch swift and swift-cmark
+      - name: Fetch swift, swift-cmark and swift-syntax
         run: |
           FULL="${{ steps.version.outputs.full }}"
           VERSION="${{ steps.version.outputs.version }}"
-          for repo in swift swift-cmark; do
+          for repo in swift swift-cmark swift-syntax; do
             BRANCH=""
             for candidate in "$FULL" "$VERSION" "$VERSION.x" "$VERSION.0"; do
               if git ls-remote --exit-code --heads "https://github.com/swiftlang/$repo.git" "release/$candidate" >/dev/null; then
@@ -120,7 +120,7 @@ jobs:
       - name: Build the Swift compiler for iOS
         run: |
           export CCACHE_DIR="$HOME/Library/Caches/ccache" CCACHE_MAXSIZE=6G
-          Toolchain/build-swift.sh "$RUNNER_TEMP/swift" "$RUNNER_TEMP/swift-cmark" "$RUNNER_TEMP/llvm-build" "$RUNNER_TEMP/swift-build"
+          Toolchain/build-swift.sh "$RUNNER_TEMP/swift" "$RUNNER_TEMP/swift-cmark" "$RUNNER_TEMP/swift-syntax" "$RUNNER_TEMP/llvm-build" "$RUNNER_TEMP/swift-build"
           ccache --show-stats
 
       - name: Swift link smoke test
