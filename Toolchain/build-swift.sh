@@ -63,6 +63,18 @@ SWIFT_IOS=(
   "${LAUNCHER[@]}"
 )
 
+echo "::group::Kiln macro plug-ins"
+# Add Kiln's own macro plug-ins (stand-ins for Apple's closed-source ones) to Swift's macro build.
+for plugin in "$(cd "$(dirname "$0")" && pwd)"/macros/*/; do
+  name="$(basename "$plugin")"
+  rm -rf "$SWIFT_SRC/lib/Macros/Sources/$name"
+  cp -R "$plugin" "$SWIFT_SRC/lib/Macros/Sources/$name"
+  grep -q "Sources/$name)" "$SWIFT_SRC/lib/Macros/CMakeLists.txt" \
+    || echo "add_subdirectory(Sources/$name)" >> "$SWIFT_SRC/lib/Macros/CMakeLists.txt"
+  echo "Added macro plug-in $name"
+done
+echo "::endgroup::"
+
 echo "::group::Configure Swift for iOS"
 cmake -S "$SWIFT_SRC" -B "$WORK/swift" "${SWIFT_IOS[@]}" \
   -DLLVM_DIR="$LLVM_WORK/ios/lib/cmake/llvm" \
@@ -108,6 +120,17 @@ echo "::group::Build Swift compiler libraries for iOS"
 LIBRARIES=($(ninja -C "$WORK/swift" -t targets all | sed -n 's#^\(lib/lib[^:]*\.a\):.*#\1#p' | sort -u))
 echo "Building ${#LIBRARIES[@]} libraries"
 ninja -C "$WORK/swift" "${LIBRARIES[@]}"
+# Macro support: the in-process plug-in server (iOS cannot start plug-in processes) and the macro
+# plug-ins, built as dylibs under lib/swift/host and lib/swift/host/plugins.
+PLUGIN_TARGETS=($(ninja -C "$WORK/swift" -t targets all \
+  | sed -n 's#^\(lib/swift/host/\(plugins/\)\{0,1\}lib[^/:]*\.dylib\):.*#\1#p' | sort -u))
+echo "Plug-in targets: ${PLUGIN_TARGETS[*]}"
+if [ ${#PLUGIN_TARGETS[@]} -gt 0 ]; then
+  ninja -C "$WORK/swift" "${PLUGIN_TARGETS[@]}"
+else
+  echo "::warning::No macro plug-in targets found"
+fi
+
 # swift-syntax for the compiler: shared libraries under lib/swift/host/compiler.
 SYNTAX_TARGETS=($(ninja -C "$WORK/swift" -t targets all | sed -n 's#^\(lib/swift/host/compiler/[^:]*\.dylib\):.*#\1#p' | sort -u))
 echo "swift-syntax libraries: ${SYNTAX_TARGETS[*]}"
@@ -121,6 +144,8 @@ mkdir -p "$INSTALL/lib" "$INSTALL/include"
 cp "$WORK/swift"/lib/*.a "$INSTALL/lib/"
 mkdir -p "$INSTALL/lib/host"
 cp "$WORK/swift"/lib/swift/host/compiler/*.dylib "$INSTALL/lib/host/"
+cp "$WORK/swift"/lib/swift/host/*.dylib "$INSTALL/lib/host/" 2>/dev/null || true
+cp "$WORK/swift"/lib/swift/host/plugins/*.dylib "$INSTALL/lib/host/" 2>/dev/null || true
 ls -l "$INSTALL/lib/host"
 otool -L "$INSTALL/lib/host/lib_CompilerSwiftSyntax.dylib" || true
 cp "$WORK/cmark-install"/lib/*.a "$INSTALL/lib/"

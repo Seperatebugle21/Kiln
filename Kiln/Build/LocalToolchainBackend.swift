@@ -68,7 +68,7 @@ struct LocalToolchainBackend: BuildBackend {
             "-Onone",
             "-module-cache-path", Self.moduleCacheURL.path,
             "-o", object.path,
-        ]
+        ] + Self.macroPluginArguments()
         let started = Date()
         let (compileStatus, compilerOutput) = await Self.runOnLargeStack {
             Self.capturingStandardError {
@@ -128,6 +128,16 @@ struct LocalToolchainBackend: BuildBackend {
     }
 
     // MARK: Helpers
+
+    /// Macros run as plug-ins. iOS cannot start the usual plug-in processes, so the compiler loads
+    /// them in-process through libSwiftInProcPluginServer; Kiln embeds both in its Frameworks folder
+    /// (signed with the app), named lib<Module>.dylib (ObservationMacros, PreviewsMacros, …).
+    static func macroPluginArguments() -> [String] {
+        guard let frameworks = Bundle.main.privateFrameworksURL else { return [] }
+        let server = frameworks.appendingPathComponent("libSwiftInProcPluginServer.dylib")
+        guard FileManager.default.fileExists(atPath: server.path) else { return [] }
+        return ["-in-process-plugin-server-path", server.path, "-plugin-path", frameworks.path]
+    }
 
     /// A Swift module name from the project name: letters, digits and underscores.
     static func moduleName(for projectName: String) -> String {
