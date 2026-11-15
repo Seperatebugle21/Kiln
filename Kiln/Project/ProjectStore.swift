@@ -46,6 +46,27 @@ enum ProjectError: LocalizedError {
     }
 }
 
+/// A project opened from outside Kiln. `scopeBookmark` is the folder iOS granted access to;
+/// the project is at `relativePath` inside it (empty when it is that folder).
+struct RecentProject: Codable, Identifiable, Hashable {
+    var id: String { path }
+    var name: String
+    var path: String
+    var scopeBookmark: Data
+    var relativePath: String
+
+    static func load(key: String) -> [RecentProject] {
+        guard let data = UserDefaults.standard.data(forKey: key) else { return [] }
+        return (try? JSONDecoder().decode([RecentProject].self, from: data)) ?? []
+    }
+
+    static func save(_ recents: [RecentProject], key: String) {
+        if let data = try? JSONEncoder().encode(recents) {
+            UserDefaults.standard.set(data, forKey: key)
+        }
+    }
+}
+
 /// The open project: its files on disk, the file in the editor and its unsaved text.
 @MainActor
 @Observable
@@ -61,7 +82,13 @@ final class ProjectStore {
     var errorMessage: String?
 
     private var securityScopedURL: URL?
-    private static let bookmarkKey = "kiln.lastProjectBookmark"
+    private static let reopenKey = "kiln.reopenLastProject"
+    private static let lastProjectKey = "kiln.lastProject"
+    private static let recentsKey = "kiln.recentProjects"
+    private static let grantsKey = "kiln.folderGrants"
+
+    /// Projects opened from outside Kiln (Files, iCloud Drive, other apps), newest first.
+    private(set) var recentProjects: [RecentProject] = RecentProject.load(key: ProjectStore.recentsKey)
 
     /// Folders that never contain project sources.
     static let ignoredDirectoryNames: Set<String> = [
@@ -75,34 +102,137 @@ final class ProjectStore {
 
     // MARK: Opening and closing
 
+    /// Opens a project folder (or a zipped project) that the user picked or tapped.
     func open(_ url: URL) {
+        open(url, scope: nil)
+    }
+
+    /// Opens `url`. `scope` is a security-scoped folder that contains it and is already being accessed.
+    private func open(_ url: URL, scope: URL?) {
         // A zipped project (a .swiftpm sent as one file): unpack it into Kiln's Projects folder first.
         if !Self.isDirectory(url) {
+            scope?.stopAccessingSecurityScopedResource()
             importArchive(url)
             return
         }
         // Opening a folder inside the current project (a .swiftpm in a repo) keeps the parent's access.
-        var inheritedScope: URL?
-        if let scoped = securityScopedURL,
-           url.standardizedFileURL.path.hasPrefix(scoped.standardizedFileURL.path + "/") {
-            inheritedScope = scoped
+        var keptScope = scope
+        if keptScope == nil, let current = securityScopedURL, Self.path(url, isInside: current) {
+            keptScope = current
             securityScopedURL = nil
         }
         close(forget: false)
-        if let inheritedScope {
-            securityScopedURL = inheritedScope
+        if let keptScope {
+            securityScopedURL = keptScope
         } else if url.startAccessingSecurityScopedResource() {
             securityScopedURL = url
         }
         root = url
         kind = ProjectDetector.kind(of: url)
-        if let bookmark = try? url.bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil) {
-            UserDefaults.standard.set(bookmark, forKey: Self.bookmarkKey)
-        }
+        remember(url, scope: securityScopedURL ?? url)
         reloadTree()
         if let main = ProjectDetector.preferredStartFile(in: swiftFiles()) {
             select(main)
         }
+    }
+
+    /// Opens an .xcodeproj that was picked on its own. iOS only gives access to the picked bundle,
+    /// but the sources live next to it, so Kiln opens the surrounding folder when it can already
+    /// read it: Kiln's own Projects folder, or a folder the user granted before (Kiln remembers
+    /// those). Returns false when Kiln has to ask for the folder.
+    func openXcodeProject(_ project: URL) -> Bool {
+        let folder = project.deletingLastPathComponent()
+        if let local = try? Self.localProjectsFolder(), Self.path(folder, isInside: local) {
+            open(folder)
+            return true
+        }
+        if let scope = grantedScope(covering: folder) {
+            open(folder, scope: scope)
+            return true
+        }
+        return false
+    }
+
+    /// The user picked `folder` to give Kiln access to `project`'s sources. Kiln remembers the
+    /// folder, so other projects inside it open without asking again.
+    func grantFolder(_ folder: URL, for project: URL?) {
+        guard folder.startAccessingSecurityScopedResource() else {
+            open(folder)
+            return
+        }
+        if let bookmark = try? folder.bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil) {
+            var grants = (UserDefaults.standard.array(forKey: Self.grantsKey) as? [Data]) ?? []
+            grants.insert(bookmark, at: 0)
+            UserDefaults.standard.set(Array(grants.prefix(20)), forKey: Self.grantsKey)
+        }
+        if let project, Self.path(project, isInside: folder) {
+            open(project.deletingLastPathComponent(), scope: folder)
+        } else {
+            open(folder, scope: folder)
+        }
+    }
+
+    /// A remembered folder (a grant or a recent project) that contains `folder`, with access started.
+    private func grantedScope(covering folder: URL) -> URL? {
+        let grants = (UserDefaults.standard.array(forKey: Self.grantsKey) as? [Data]) ?? []
+        for bookmark in grants + recentProjects.map(\.scopeBookmark) {
+            var isStale = false
+            guard let scope = try? URL(resolvingBookmarkData: bookmark, options: [], relativeTo: nil, bookmarkDataIsStale: &isStale),
+                  folder.standardizedFileURL.path == scope.standardizedFileURL.path || Self.path(folder, isInside: scope),
+                  scope.startAccessingSecurityScopedResource()
+            else { continue }
+            if FileManager.default.isReadableFile(atPath: folder.path) {
+                return scope
+            }
+            scope.stopAccessingSecurityScopedResource()
+        }
+        return nil
+    }
+
+    func openRecent(_ recent: RecentProject) {
+        var isStale = false
+        guard let scope = try? URL(resolvingBookmarkData: recent.scopeBookmark, options: [], relativeTo: nil, bookmarkDataIsStale: &isStale) else {
+            forgetRecent(recent)
+            errorMessage = "Kiln can no longer find \(recent.name). Open it again with Open Project."
+            return
+        }
+        let accessing = scope.startAccessingSecurityScopedResource()
+        let url = recent.relativePath.isEmpty ? scope : scope.appendingPathComponent(recent.relativePath, isDirectory: true)
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            if accessing { scope.stopAccessingSecurityScopedResource() }
+            forgetRecent(recent)
+            errorMessage = "\(recent.name) is no longer there. Open it again with Open Project."
+            return
+        }
+        open(url, scope: accessing ? scope : nil)
+    }
+
+    func forgetRecent(_ recent: RecentProject) {
+        recentProjects.removeAll { $0.id == recent.id }
+        RecentProject.save(recentProjects, key: Self.recentsKey)
+    }
+
+    /// Adds the project to the recent list (projects outside Kiln's own folder) and marks it to reopen.
+    private func remember(_ url: URL, scope: URL) {
+        UserDefaults.standard.set(true, forKey: Self.reopenKey)
+        if let local = try? Self.localProjectsFolder(), Self.path(url, isInside: local) {
+            UserDefaults.standard.set("local:" + String(url.standardizedFileURL.path.dropFirst(local.standardizedFileURL.path.count + 1)), forKey: Self.lastProjectKey)
+            return
+        }
+        guard let bookmark = try? scope.bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil) else { return }
+        let scopePath = scope.standardizedFileURL.path
+        let rootPath = url.standardizedFileURL.path
+        let relative = rootPath.hasPrefix(scopePath + "/") ? String(rootPath.dropFirst(scopePath.count + 1)) : ""
+        let recent = RecentProject(name: url.deletingPathExtension().lastPathComponent, path: rootPath, scopeBookmark: bookmark, relativePath: relative)
+        recentProjects.removeAll { $0.id == recent.id }
+        recentProjects.insert(recent, at: 0)
+        recentProjects = Array(recentProjects.prefix(20))
+        RecentProject.save(recentProjects, key: Self.recentsKey)
+        UserDefaults.standard.set("recent:" + rootPath, forKey: Self.lastProjectKey)
+    }
+
+    static func path(_ url: URL, isInside folder: URL) -> Bool {
+        url.standardizedFileURL.path.hasPrefix(folder.standardizedFileURL.path + "/")
     }
 
     /// Unpacks a zipped project into Kiln's Projects folder and opens it.
@@ -136,14 +266,17 @@ final class ProjectStore {
         url.pathExtension.lowercased() == "swiftpm"
     }
 
+    /// Reopens the project that was open when Kiln was last closed.
     func restoreLastProject() {
-        guard root == nil, let data = UserDefaults.standard.data(forKey: Self.bookmarkKey) else { return }
-        var isStale = false
-        guard let url = try? URL(resolvingBookmarkData: data, options: [], relativeTo: nil, bookmarkDataIsStale: &isStale) else {
-            UserDefaults.standard.removeObject(forKey: Self.bookmarkKey)
-            return
+        guard root == nil, UserDefaults.standard.bool(forKey: Self.reopenKey),
+              let last = UserDefaults.standard.string(forKey: Self.lastProjectKey)
+        else { return }
+        if last.hasPrefix("local:"), let local = try? Self.localProjectsFolder() {
+            let url = local.appendingPathComponent(String(last.dropFirst(6)), isDirectory: true)
+            if FileManager.default.fileExists(atPath: url.path) { open(url) }
+        } else if last.hasPrefix("recent:"), let recent = recentProjects.first(where: { $0.path == String(last.dropFirst(7)) }) {
+            openRecent(recent)
         }
-        open(url)
     }
 
     func close(forget: Bool = true) {
@@ -156,25 +289,25 @@ final class ProjectStore {
         buffer = ""
         isDirty = false
         if forget {
-            UserDefaults.standard.removeObject(forKey: Self.bookmarkKey)
+            UserDefaults.standard.set(false, forKey: Self.reopenKey)
         }
     }
 
-    /// Creates a small SwiftUI app in the app's Documents folder and opens it.
-    func createSampleProject() {
+    /// Creates a project from a template in Kiln's Projects folder and opens it.
+    func createProject(named rawName: String, template: ProjectTemplate) {
+        let name = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "/", with: "-")
+            .replacingOccurrences(of: ":", with: "-")
+        let baseName = name.isEmpty || name.hasPrefix(".") ? "My App" : name
         do {
             let projectsFolder = try Self.localProjectsFolder()
-            var folder = projectsFolder.appendingPathComponent("HelloKiln", isDirectory: true)
+            var folder = projectsFolder.appendingPathComponent(baseName, isDirectory: true)
             var index = 2
             while FileManager.default.fileExists(atPath: folder.path) {
-                folder = projectsFolder.appendingPathComponent("HelloKiln \(index)", isDirectory: true)
+                folder = projectsFolder.appendingPathComponent("\(baseName) \(index)", isDirectory: true)
                 index += 1
             }
-            let sources = folder.appendingPathComponent("HelloKiln", isDirectory: true)
-            try FileManager.default.createDirectory(at: sources, withIntermediateDirectories: true)
-            try SampleProject.appSource.write(to: sources.appendingPathComponent("HelloKilnApp.swift"), atomically: true, encoding: .utf8)
-            try SampleProject.contentViewSource.write(to: sources.appendingPathComponent("ContentView.swift"), atomically: true, encoding: .utf8)
-            for (path, contents) in SampleProject.packageFiles {
+            for (path, contents) in template.files(projectName: baseName) {
                 let url = folder.appendingPathComponent(path)
                 try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
                 try contents.write(to: url, atomically: true, encoding: .utf8)
