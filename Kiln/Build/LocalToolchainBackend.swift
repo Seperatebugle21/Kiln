@@ -321,10 +321,15 @@ struct LocalToolchainBackend: BuildBackend {
         // 5. Link the app into a dylib that Kiln can load, against the packages dylib.
         log("Linking…")
         let linkArguments = linkCommon + ["-install_name", "@rpath/\(moduleName).dylib"]
-            + objects.map(\.path) + (packagesDylib.map { [$0.path] } ?? []) + dynamicFrameworkFlags
+            + objects.map(\.path) + (packagesDylib.map { [$0.path] } ?? [])
+            // Prebuilt static libraries again, after the packages dylib: the app may call functions of
+            // a binary target directly (Echo calls lame_* itself), which the packages dylib only
+            // contains when a package used them. Only what is still missing is taken from them.
+            + libraries.map(\.path) + Self.uniqueLinkFlags(packageLinkFlags)
+            + dynamicFrameworkFlags
             + Self.uniqueLinkFlags(request.plan.appLinkFlags)
             + (fileManager.fileExists(atPath: embeddedFrameworks.path) ? ["-rpath", embeddedFrameworks.path] : [])
-            + (usesCxx ? ["-lc++"] : []) + [builtins.path, "-o", dylib.path]
+            + (usesCxx || !libraries.isEmpty ? ["-lc++"] : []) + [builtins.path, "-o", dylib.path]
         try link(linkArguments, output: dylib, log: log)
 
         // 3. Sign with the certificate from Settings, so iOS accepts it without JIT.
