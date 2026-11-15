@@ -15,80 +15,43 @@ struct WelcomeView: View {
 
     var body: some View {
         NavigationStack {
-            List {
-                Section {
-                    header
-                        .listRowBackground(Color.clear)
-                        .listRowInsets(EdgeInsets())
-                }
+            ZStack(alignment: .bottom) {
+                EmberBackground()
+                    .ignoresSafeArea()
 
-                Section {
-                    ActionRow(title: "New Project", systemImage: "plus", color: .accentColor) {
-                        showsNewProject = true
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 28) {
+                        topBar
+                        greeting
+                        if let latest = summaries.first {
+                            ContinueCard(project: latest) { projects.open(latest.url) }
+                                .contextMenu { menu(for: latest) }
+                        }
+                        if summaries.isEmpty {
+                            emptyState
+                        } else {
+                            shelf
+                        }
                     }
-                    ActionRow(title: "Open from Files", systemImage: "folder.fill", color: .blue) {
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, 120)
+                }
+                .scrollIndicators(.hidden)
+                .refreshable { reload() }
+
+                ActionDock(
+                    new: { showsNewProject = true },
+                    open: {
                         DocumentPicker.present(contentTypes: DocumentPicker.projectTypes) { url in
                             handlePickedProject(url)
                         }
-                    }
-                    ActionRow(title: "Clone from GitHub", systemImage: "arrow.down", color: Color(white: 0.2)) {
-                        showsClone = true
-                    }
-                }
-
-                Section {
-                    if summaries.isEmpty {
-                        Text("Your projects will appear here.")
-                            .foregroundStyle(.secondary)
-                    } else if filtered.isEmpty {
-                        Text("No projects match \u{201C}\(search)\u{201D}.")
-                            .foregroundStyle(.secondary)
-                    }
-                    ForEach(filtered) { project in
-                        Button {
-                            projects.open(project.url)
-                        } label: {
-                            ProjectRow(project: project)
-                        }
-                        .swipeActions {
-                            Button("Delete", systemImage: "trash", role: .destructive) { pendingDeletion = project }
-                            Button("Rename", systemImage: "pencil") {
-                                newName = project.name
-                                renaming = project
-                            }
-                            .tint(.orange)
-                        }
-                        .contextMenu {
-                            Button("Open", systemImage: "arrow.up.forward.app") { projects.open(project.url) }
-                            Button("Rename", systemImage: "pencil") {
-                                newName = project.name
-                                renaming = project
-                            }
-                            Button("Duplicate", systemImage: "plus.square.on.square") { duplicate(project) }
-                            Divider()
-                            Button("Delete", systemImage: "trash", role: .destructive) { pendingDeletion = project }
-                        }
-                    }
-                } header: {
-                    Text("Projects")
-                } footer: {
-                    Text("Stored in Files › On My iPhone › Kiln. Projects you open from elsewhere are copied here.")
-                }
+                    },
+                    clone: { showsClone = true }
+                )
+                .padding(.bottom, 8)
             }
-            .listStyle(.insetGrouped)
-            .listSectionSpacing(.compact)
-            .searchable(text: $search, placement: .navigationBarDrawer(displayMode: .automatic), prompt: "Search projects")
-            .refreshable { reload() }
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        showsSettings = true
-                    } label: {
-                        Label("Settings", systemImage: "gearshape")
-                    }
-                }
-            }
+            .toolbar(.hidden, for: .navigationBar)
+            .environment(\.colorScheme, .dark)
             .overlay { importOverlay }
             .onAppear(perform: reload)
             .onChange(of: projects.importingName) { reload() }
@@ -145,24 +108,115 @@ struct WelcomeView: View {
 
     // MARK: Sections
 
-    private var header: some View {
-        VStack(spacing: 10) {
+    private var topBar: some View {
+        HStack(spacing: 10) {
             Image("KilnLogo")
                 .resizable()
-                .frame(width: 88, height: 88)
-                .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-                .shadow(color: Color.accentColor.opacity(0.25), radius: 16, y: 8)
+                .frame(width: 34, height: 34)
+                .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
                 .accessibilityHidden(true)
             Text("Kiln")
-                .font(.system(.largeTitle, design: .rounded).weight(.bold))
-            Text("Build and run SwiftUI apps on your iPhone")
+                .font(.system(.title3, design: .rounded).weight(.bold))
+                .foregroundStyle(.white)
+            Spacer()
+            Button {
+                showsSettings = true
+            } label: {
+                Image(systemName: "gearshape.fill")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(Color.white.opacity(0.9))
+                    .frame(width: 40, height: 40)
+                    .background(Color.white.opacity(0.08), in: Circle())
+                    .overlay(Circle().strokeBorder(Color.white.opacity(0.12)))
+            }
+            .accessibilityLabel("Settings")
+        }
+        .padding(.top, 8)
+    }
+
+    private var greeting: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(Self.greeting())
+                .font(.system(size: 38, weight: .bold, design: .rounded))
+                .foregroundStyle(
+                    LinearGradient(colors: [.white, Color(red: 1, green: 0.78, blue: 0.6)], startPoint: .leading, endPoint: .trailing)
+                )
+            Text(summaries.isEmpty ? "Let's fire up your first app." : "What are we making today?")
+                .font(.title3)
+                .foregroundStyle(Color.white.opacity(0.6))
+        }
+    }
+
+    private var shelf: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("Your Projects")
+                    .font(.headline)
+                    .foregroundStyle(.white)
+                Spacer()
+                NavigationLink {
+                    AllProjectsView(summaries: summaries, open: { projects.open($0.url) }, menu: { menu(for: $0) }, reload: reload)
+                } label: {
+                    Text("See All \(summaries.count)")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(Color.ember)
+                }
+            }
+            ScrollView(.horizontal) {
+                HStack(spacing: 14) {
+                    ForEach(Array(summaries.dropFirst().prefix(12))) { project in
+                        ProjectTile(project: project) { projects.open(project.url) }
+                            .contextMenu { menu(for: project) }
+                    }
+                    NewTile { showsNewProject = true }
+                }
+                .padding(.vertical, 4)
+            }
+            .scrollIndicators(.hidden)
+            .scrollClipDisabled()
+        }
+    }
+
+    private var emptyState: some View {
+        VStack(spacing: 18) {
+            Image(systemName: "flame.fill")
+                .font(.system(size: 64))
+                .foregroundStyle(
+                    LinearGradient(colors: [.yellow, Color.ember, .red], startPoint: .top, endPoint: .bottom)
+                )
+                .shadow(color: Color.ember.opacity(0.7), radius: 24)
+                .symbolEffect(.breathe, options: .repeat(.continuous))
+            Text("Nothing in the kiln yet")
+                .font(.title3.weight(.semibold))
+                .foregroundStyle(.white)
+            Text("Start from a template, or open a Swift package, an App Playground or an Xcode project.")
                 .font(.subheadline)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Color.white.opacity(0.6))
                 .multilineTextAlignment(.center)
         }
         .frame(maxWidth: .infinity)
-        .padding(.top, 12)
-        .padding(.bottom, 8)
+        .padding(.vertical, 40)
+    }
+
+    @ViewBuilder
+    private func menu(for project: ProjectSummary) -> some View {
+        Button("Open", systemImage: "arrow.up.forward.app") { projects.open(project.url) }
+        Button("Rename", systemImage: "pencil") {
+            newName = project.name
+            renaming = project
+        }
+        Button("Duplicate", systemImage: "plus.square.on.square") { duplicate(project) }
+        Divider()
+        Button("Delete", systemImage: "trash", role: .destructive) { pendingDeletion = project }
+    }
+
+    private static func greeting() -> String {
+        switch Calendar.current.component(.hour, from: Date()) {
+        case 5..<12: return "Good morning"
+        case 12..<18: return "Good afternoon"
+        case 18..<23: return "Good evening"
+        default: return "Late night?"
+        }
     }
 
     @ViewBuilder
@@ -281,69 +335,278 @@ struct ProjectSummary: Identifiable, Hashable {
     }
 }
 
-/// A rounded, colored icon like the ones in the Settings app.
-private struct RowIcon: View {
-    let systemImage: String
-    let color: Color
+extension Color {
+    /// Kiln's warm orange.
+    static let ember = Color(red: 0.95, green: 0.45, blue: 0.2)
+}
+
+/// A dark, warm background: a glow at the bottom and embers drifting up.
+private struct EmberBackground: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        Image(systemName: systemImage)
-            .font(.system(size: 15, weight: .semibold))
-            .foregroundStyle(.white)
-            .frame(width: 30, height: 30)
-            .background(color.gradient, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+        ZStack {
+            LinearGradient(
+                colors: [Color(red: 0.09, green: 0.05, blue: 0.04), Color(red: 0.04, green: 0.03, blue: 0.03)],
+                startPoint: .top, endPoint: .bottom
+            )
+            RadialGradient(
+                colors: [Color.ember.opacity(0.45), Color.red.opacity(0.12), Color.clear],
+                center: .bottom, startRadius: 10, endRadius: 520
+            )
+            RadialGradient(
+                colors: [Color.orange.opacity(0.12), Color.clear],
+                center: .topTrailing, startRadius: 0, endRadius: 360
+            )
+            if !reduceMotion {
+                TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { timeline in
+                    Canvas { context, size in
+                        Self.drawEmbers(in: &context, size: size, time: timeline.date.timeIntervalSinceReferenceDate)
+                    }
+                }
+                .allowsHitTesting(false)
+            }
+        }
+    }
+
+    private static func drawEmbers(in context: inout GraphicsContext, size: CGSize, time: Double) {
+        for index in 0..<36 {
+            let seed = Double(index) * 12.9898
+            let speed = 0.03 + (sin(seed) + 1) * 0.02
+            let progress = fract(time * speed + fract(seed * 0.618))
+            let x = fract(sin(seed) * 43758.5453) * Double(size.width) + sin(time * 0.6 + seed) * 14
+            let y = Double(size.height) * (1.05 - progress * 1.15)
+            let radius = 1.2 + fract(seed * 0.37) * 2.2
+            let opacity = sin(progress * Double.pi) * (0.35 + fract(seed * 0.73) * 0.5)
+            let rect = CGRect(x: x - radius, y: y - radius, width: radius * 2, height: radius * 2)
+            let color = Color(red: 1, green: 0.6 + fract(seed) * 0.3, blue: 0.3).opacity(opacity)
+            var ember = context
+            ember.addFilter(.blur(radius: radius * 0.6))
+            ember.fill(Circle().path(in: rect), with: .color(color))
+        }
+    }
+
+    private static func fract(_ value: Double) -> Double { value - value.rounded(.down) }
+}
+
+/// The most recent project, big, with a button to continue.
+private struct ContinueCard: View {
+    let project: ProjectSummary
+    let open: () -> Void
+
+    var body: some View {
+        Button(action: open) {
+            VStack(alignment: .leading, spacing: 18) {
+                HStack(alignment: .top) {
+                    ProjectGlyph(project: project, size: 54)
+                    Spacer()
+                    Text("CONTINUE")
+                        .font(.caption2.weight(.bold))
+                        .tracking(1.5)
+                        .foregroundStyle(Color.white.opacity(0.55))
+                }
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(project.name)
+                        .font(.system(.title, design: .rounded).weight(.bold))
+                        .foregroundStyle(Color.white)
+                        .lineLimit(1)
+                    HStack(spacing: 4) {
+                        Text(project.kindLabel)
+                        if let modified = project.modified {
+                            Text("·")
+                            Text(modified, format: .relative(presentation: .named))
+                        }
+                    }
+                    .font(.subheadline)
+                    .foregroundStyle(Color.white.opacity(0.6))
+                }
+                HStack {
+                    Label("Open Project", systemImage: "play.fill")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(Color.black)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 10)
+                        .background(Color.ember.gradient, in: Capsule())
+                    Spacer()
+                }
+            }
+            .padding(20)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background {
+                RoundedRectangle(cornerRadius: 28, style: .continuous)
+                    .fill(.ultraThinMaterial)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 28, style: .continuous)
+                            .fill(LinearGradient(colors: [project.color.opacity(0.35), Color.clear], startPoint: .topLeading, endPoint: .bottomTrailing))
+                    )
+                    .overlay(RoundedRectangle(cornerRadius: 28, style: .continuous).strokeBorder(Color.white.opacity(0.12)))
+            }
+            .shadow(color: project.color.opacity(0.25), radius: 30, y: 12)
+        }
+        .buttonStyle(SquishStyle())
     }
 }
 
-private struct ActionRow: View {
-    let title: String
-    let systemImage: String
-    let color: Color
+private struct ProjectTile: View {
+    let project: ProjectSummary
+    let open: () -> Void
+
+    var body: some View {
+        Button(action: open) {
+            VStack(alignment: .leading, spacing: 0) {
+                ProjectGlyph(project: project, size: 42)
+                Spacer(minLength: 16)
+                Text(project.name)
+                    .font(.headline)
+                    .foregroundStyle(Color.white)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
+                if let modified = project.modified {
+                    Text(modified, format: .relative(presentation: .named))
+                        .font(.caption)
+                        .foregroundStyle(Color.white.opacity(0.5))
+                        .lineLimit(1)
+                        .padding(.top, 2)
+                }
+            }
+            .padding(16)
+            .frame(width: 148, height: 164, alignment: .leading)
+            .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 24, style: .continuous).strokeBorder(Color.white.opacity(0.1)))
+        }
+        .buttonStyle(SquishStyle())
+    }
+}
+
+private struct NewTile: View {
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 14) {
-                RowIcon(systemImage: systemImage, color: color)
-                Text(title)
-                    .foregroundStyle(.primary)
-                Spacer()
-                Image(systemName: "chevron.right")
-                    .font(.footnote.weight(.semibold))
-                    .foregroundStyle(.tertiary)
+            VStack(spacing: 10) {
+                Image(systemName: "plus")
+                    .font(.system(size: 26, weight: .semibold))
+                Text("New Project")
+                    .font(.subheadline.weight(.semibold))
             }
+            .foregroundStyle(Color.white.opacity(0.7))
+            .frame(width: 148, height: 164)
+            .background(
+                RoundedRectangle(cornerRadius: 24, style: .continuous)
+                    .strokeBorder(Color.white.opacity(0.25), style: StrokeStyle(lineWidth: 1.5, dash: [6, 5]))
+            )
+        }
+        .buttonStyle(SquishStyle())
+    }
+}
+
+/// A project's icon: its kind's symbol on a glowing, colored square.
+private struct ProjectGlyph: View {
+    let project: ProjectSummary
+    let size: CGFloat
+
+    var body: some View {
+        Image(systemName: project.systemImage)
+            .font(.system(size: size * 0.42, weight: .semibold))
+            .foregroundStyle(Color.white)
+            .frame(width: size, height: size)
+            .background(project.color.gradient, in: RoundedRectangle(cornerRadius: size * 0.3, style: .continuous))
+            .shadow(color: project.color.opacity(0.5), radius: 10, y: 4)
+    }
+}
+
+/// The floating bar with New, Open and Clone.
+private struct ActionDock: View {
+    let new: () -> Void
+    let open: () -> Void
+    let clone: () -> Void
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Button(action: new) {
+                Label("New", systemImage: "plus")
+                    .font(.headline)
+                    .foregroundStyle(Color.black)
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 13)
+                    .background(Color.ember.gradient, in: Capsule())
+            }
+            .accessibilityLabel("New Project")
+            dockButton("Open", systemImage: "folder", action: open)
+            dockButton("Clone", systemImage: "arrow.down.circle", action: clone)
+        }
+        .buttonStyle(SquishStyle())
+        .padding(6)
+        .background(.ultraThinMaterial, in: Capsule())
+        .overlay(Capsule().strokeBorder(Color.white.opacity(0.12)))
+        .shadow(color: Color.black.opacity(0.5), radius: 20, y: 10)
+    }
+
+    private func dockButton(_ title: String, systemImage: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Label(title, systemImage: systemImage)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(Color.white)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 13)
         }
     }
 }
 
-private struct ProjectRow: View {
-    let project: ProjectSummary
+/// Every project, searchable, for when the shelf is not enough.
+private struct AllProjectsView<Menu: View>: View {
+    let summaries: [ProjectSummary]
+    let open: (ProjectSummary) -> Void
+    let menu: (ProjectSummary) -> Menu
+    let reload: () -> Void
+    @State private var search = ""
 
     var body: some View {
-        HStack(spacing: 14) {
-            RowIcon(systemImage: project.systemImage, color: project.color)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(project.name)
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-                HStack(spacing: 4) {
-                    Text(project.kindLabel)
-                    if let modified = project.modified {
-                        Text("·")
-                        Text(modified, format: .relative(presentation: .named))
+        List {
+            ForEach(filtered) { project in
+                Button {
+                    open(project)
+                } label: {
+                    HStack(spacing: 14) {
+                        ProjectGlyph(project: project, size: 36)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(project.name)
+                                .foregroundStyle(.primary)
+                            HStack(spacing: 4) {
+                                Text(project.kindLabel)
+                                if let modified = project.modified {
+                                    Text("·")
+                                    Text(modified, format: .relative(presentation: .named))
+                                }
+                            }
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        }
                     }
                 }
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
+                .contextMenu { menu(project) }
             }
-            Spacer(minLength: 8)
-            Image(systemName: "chevron.right")
-                .font(.footnote.weight(.semibold))
-                .foregroundStyle(.tertiary)
         }
-        .padding(.vertical, 2)
-        .contentShape(Rectangle())
+        .searchable(text: $search, prompt: "Search projects")
+        .navigationTitle("All Projects")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.visible, for: .navigationBar)
+        .refreshable { reload() }
+    }
+
+    private var filtered: [ProjectSummary] {
+        let query = search.trimmingCharacters(in: .whitespaces)
+        guard !query.isEmpty else { return summaries }
+        return summaries.filter { $0.name.localizedCaseInsensitiveContains(query) }
+    }
+}
+
+/// Shrinks slightly while pressed.
+private struct SquishStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.95 : 1)
+            .animation(.spring(duration: 0.25, bounce: 0.4), value: configuration.isPressed)
     }
 }
 
