@@ -60,6 +60,15 @@ jobs:
           swift build -c release 2>&1 | tail -30
           test -x .build/release/kiln-build
 
+      - name: Show how Apple's FoundationModels macros expand
+        continue-on-error: true
+        run: |
+          xcrun swiftc -target arm64-apple-ios26.0 -sdk "$(xcrun --sdk iphoneos --show-sdk-path)" -typecheck \
+            -Xfrontend -dump-macro-expansions Toolchain/test/macro-samples/GenerableSample.swift 2>&1 | head -400
+          SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
+          IFACE=$(ls "$SDK"/System/Library/Frameworks/FoundationModels.framework/Modules/FoundationModels.swiftmodule/arm64e-apple-ios.swiftinterface)
+          grep -nE "macro Generable|macro Guide|protocol Generable|protocol ConvertibleFromGeneratedContent|protocol ConvertibleToGeneratedContent|struct GenerationSchema|struct Property|init\(name|public init\(type|struct GenerationID|struct GenerationGuide|func value|init\(properties|init\(kind|struct GeneratedContent|enum Kind|init\(_ content|static func anyOf|init\(type:.*anyOf" "$IFACE" | head -120
+
       - name: Fetch the project
         run: |
           git clone --depth 1 ${PROJECT_REF:+--branch "$PROJECT_REF"} "https://github.com/$PROJECT_REPO" "$RUNNER_TEMP/project"
