@@ -27,8 +27,24 @@ final class BuildCoordinator {
         product = nil
         append("Building \(project.name) with \(backend.name)")
 
+        // Work out the modules: package dependencies (downloaded if needed), then the app.
+        guard let root = project.root else { return false }
+        let resolver = PackageResolver(projectRoot: root, token: Keychain.read(SyncController.tokenAccount)) { line in
+            Task { @MainActor in self.append(line) }
+        }
+        let plan: BuildPlan
+        do {
+            plan = try await BuildPlanner.plan(root: root, resolver: resolver)
+        } catch {
+            return fail(error.localizedDescription)
+        }
+        plan.warnings.forEach(append)
+        if !plan.modules.isEmpty {
+            append("Packages: \(plan.modules.map(\.name).joined(separator: ", "))")
+        }
+
         var sources: [SourceFile] = []
-        for url in project.swiftFiles() {
+        for url in plan.appSources {
             let path = project.relativePath(of: url)
             do {
                 sources.append(SourceFile(path: path, text: try project.readFile(path)))
@@ -62,7 +78,7 @@ final class BuildCoordinator {
                 .appendingPathComponent("KilnBuilds", isDirectory: true)
                 .appendingPathComponent(UUID().uuidString, isDirectory: true)
             try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
-            request = BuildRequest(projectName: project.name, sources: prepared, workDirectory: work)
+            request = BuildRequest(projectName: project.name, sources: prepared, workDirectory: work, plan: plan)
         } catch {
             return fail(error.localizedDescription)
         }

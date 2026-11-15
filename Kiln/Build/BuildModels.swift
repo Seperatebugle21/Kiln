@@ -26,10 +26,12 @@ struct SourceFile: Sendable {
 /// Everything a backend needs to turn a project into a loadable dylib.
 struct BuildRequest: Sendable {
     var projectName: String
-    /// The project's sources with `@main` removed, plus the generated entry point.
+    /// The app's Swift sources with `@main` removed, plus the generated entry point.
     var sources: [SourceFile]
     /// A fresh, writable folder for this build's intermediate files and product.
     var workDirectory: URL
+    /// Package modules to build first, and the app's C sources and bridging header.
+    var plan = BuildPlan()
 }
 
 struct BuildProduct: Sendable {
