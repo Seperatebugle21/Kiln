@@ -49,6 +49,16 @@ do {
 }
 plan.warnings.forEach(log)
 log("Packages: \(plan.modules.map(\.name).joined(separator: ", "))")
+// Where each C module's sources come from, to spot missing folders.
+for module in plan.modules where module.language == .clang && module.sources.count > 5 {
+    var folders: [String: Int] = [:]
+    for source in module.sources {
+        let parts = source.path.split(separator: "/")
+        let key = parts.suffix(4).dropLast().joined(separator: "/")
+        folders[key, default: 0] += 1
+    }
+    log("  \(module.name): \(module.sources.count) files: " + folders.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }.joined(separator: ", "))
+}
 
 let rootPath = root.path + "/"
 var sources: [SourceFile] = []
