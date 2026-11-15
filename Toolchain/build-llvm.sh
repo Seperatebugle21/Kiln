@@ -73,6 +73,12 @@ echo "Building ${#LIBRARIES[@]} libraries"
 ninja -C "$WORK/ios" "${LIBRARIES[@]}"
 echo "::endgroup::"
 
+echo "::group::Clang resource headers"
+# Clang's builtin headers (stddef.h, arm_neon.h, …), some generated with clang-tblgen.
+# The Swift compiler reads them through its resource directory when it imports C modules.
+ninja -C "$WORK/ios" clang-resource-headers
+echo "::endgroup::"
+
 echo "::group::Collect"
 INSTALL="$WORK/install"
 rm -rf "$INSTALL"
@@ -84,6 +90,9 @@ for dir in "$SRC/llvm/include" "$SRC/clang/include" "$SRC/lld/include" \
   rsync -a --include='*/' --include='*.h' --include='*.def' --include='*.inc' --include='*.td' --exclude='*' "$dir/" "$INSTALL/include/"
 done
 echo "::endgroup::"
+
+mkdir -p "$INSTALL/clang-resources"
+cp -R "$WORK/ios"/lib/clang/*/include "$INSTALL/clang-resources/include"
 
 echo "Libraries: $(ls "$INSTALL"/lib/*.a | wc -l)"
 du -sh "$INSTALL"

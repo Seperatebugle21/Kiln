@@ -147,6 +147,19 @@ jobs:
           path: ${{ runner.temp }}/swift-ios-${{ steps.version.outputs.version }}.tar.gz
           retention-days: 30
 
+      # Stage 3 groundwork: what the compiler would read from the iPhoneOS SDK.
+      - name: Measure the iPhoneOS SDK
+        run: |
+          SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
+          echo "SDK: $SDK"
+          du -sh "$SDK"
+          du -sh "$SDK/usr/lib/swift" "$SDK/usr/include" "$SDK/System/Library/Frameworks" "$SDK/System/Library/PrivateFrameworks" 2>/dev/null || true
+          echo "Swift modules in usr/lib/swift: $(ls -d "$SDK"/usr/lib/swift/*.swiftmodule | wc -l)"
+          echo "Largest frameworks:"
+          du -sk "$SDK"/System/Library/Frameworks/*.framework | sort -rn | head -15
+          echo "SwiftUI module:"
+          ls -la "$SDK/System/Library/Frameworks/SwiftUI.framework/Modules/SwiftUI.swiftmodule" || true
+
       - name: Save compiler cache
         if: always()
         uses: actions/cache/save@v4

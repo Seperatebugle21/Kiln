@@ -8,8 +8,8 @@ are built for iOS as libraries and called in-process. The **Toolchain** workflow
 | Stage | What | Status |
 |---|---|---|
 | 1 | LLVM, Clang and lld (Mach-O) from `swiftlang/llvm-project`, as static libraries for `arm64-apple-ios`, plus a link test | Done (Swift 6.3) |
-| 2 | The Swift compiler for iOS, built against stage 1, first without its Swift-written parts (no macros yet), plus a link test of `swift::mainEntry` | In progress |
-| 3 | The iPhoneOS SDK interfaces (`.swiftinterface`, `.tbd`, headers) the compiler reads | Planned |
+| 2 | The Swift compiler for iOS, built against stage 1, first without its Swift-written parts (no macros yet), plus a link test of `swift::mainEntry` | Done (Swift 6.3) |
+| 3 | The compiler's resource directory (Clang builtin headers, Swift shims) and the iPhoneOS SDK interfaces (`.swiftinterface`, `.tbd`, headers) it reads | In progress |
 | 4 | Kiln links the libraries, compiles with `swift-frontend`, links with lld, signs and loads the dylib | Planned |
 
 The Swift version follows the runner's Xcode, so the compiler can read that Xcode's SDK interfaces.

@@ -120,9 +120,16 @@ cp "$WORK/cmark-install"/lib/*.a "$INSTALL/lib/"
 for dir in "$SWIFT_SRC/include" "$WORK/swift/include"; do
   rsync -a --include='*/' --include='*.h' --include='*.def' --include='*.inc' --exclude='*' "$dir/" "$INSTALL/include/"
 done
-# The compiler's resource directory: clang's builtin headers and Swift's shims, read at compile time.
-mkdir -p "$INSTALL/resources"
-cp -R "$SWIFT_SRC/stdlib/public/SwiftShims/swift/shims" "$INSTALL/resources/shims" 2>/dev/null || true
+# The compiler's resource directory (-resource-dir), read at compile time:
+#   shims/  Swift's runtime shim headers and their module map
+#   clang/  Clang's builtin headers (from the LLVM build)
+RESOURCES="$INSTALL/resources"
+mkdir -p "$RESOURCES/clang"
+rsync -a --include='*/' --include='*.h' --include='*.modulemap' --exclude='*' \
+  "$SWIFT_SRC/stdlib/public/SwiftShims/swift/shims/" "$RESOURCES/shims/"
+cp -R "$LLVM_WORK/install/clang-resources/include" "$RESOURCES/clang/include"
+ls "$RESOURCES" "$RESOURCES/shims" | head -40
+du -sh "$RESOURCES"
 echo "::endgroup::"
 
 echo "Libraries: $(ls "$INSTALL"/lib/*.a | wc -l)"
