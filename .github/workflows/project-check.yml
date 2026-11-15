@@ -1,0 +1,85 @@
+name: Project Check
+
+# Builds a real project with Kiln's own build system (kiln-build: the same project reader, package
+# resolver, planner and backend as on the iPhone), using the swift.org compiler of the same version,
+# clang and lld as separate processes. Finds the next problems without testing on a phone.
+
+on:
+  workflow_dispatch:
+    inputs:
+      repository:
+        description: "GitHub repository to build (owner/name)"
+        default: "Seperatebugle21/Echo"
+      ref:
+        description: "Branch or tag (empty: default branch)"
+        default: ""
+  push:
+    branches:
+      - "claude/**"
+    paths:
+      - ".github/workflows/project-check.yml"
+      - "Kiln/Build/**"
+      - "Kiln/Project/ZipArchive.swift"
+      - "Toolchain/test/KilnCLI/**"
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: macos-26
+    timeout-minutes: 90
+    env:
+      PROJECT_REPO: ${{ github.event.inputs.repository || 'Seperatebugle21/Echo' }}
+      PROJECT_REF: ${{ github.event.inputs.ref || '' }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install the swift.org toolchain and lld
+        run: |
+          MINOR=$(xcrun swift --version 2>&1 | sed -n 's/.*Swift version \([0-9]*\.[0-9]*\).*/\1/p' | head -1)
+          for v in "$MINOR.6" "$MINOR.5" "$MINOR.4" "$MINOR.3" "$MINOR.2" "$MINOR.1" "$MINOR"; do
+            URL="https://download.swift.org/swift-$v-release/xcode/swift-$v-RELEASE/swift-$v-RELEASE-osx.pkg"
+            if curl -sfIL "$URL" >/dev/null; then curl -sfL "$URL" -o "$RUNNER_TEMP/swift.pkg"; break; fi
+          done
+          sudo installer -pkg "$RUNNER_TEMP/swift.pkg" -target /
+          TOOLCHAIN=$(ls -d /Library/Developer/Toolchains/swift-*-RELEASE.xctoolchain | head -1)
+          echo "TOOLCHAIN=$TOOLCHAIN" >> "$GITHUB_ENV"
+          brew install lld >/dev/null
+          echo "LLD=$(brew --prefix lld)/bin/ld64.lld" >> "$GITHUB_ENV"
+
+      - name: Build kiln-build
+        working-directory: Toolchain/test/KilnCLI
+        run: |
+          for f in ../../../Kiln/Build/*.swift ../../../Kiln/Project/ZipArchive.swift; do
+            case "$(basename "$f")" in BuildCoordinator.swift) continue ;; esac
+            cp "$f" Sources/kiln-build/
+          done
+          swift build -c release 2>&1 | tail -30
+          test -x .build/release/kiln-build
+
+      - name: Fetch the project
+        run: |
+          git clone --depth 1 ${PROJECT_REF:+--branch "$PROJECT_REF"} "https://github.com/$PROJECT_REPO" "$RUNNER_TEMP/project"
+          ls "$RUNNER_TEMP/project"
+
+      - name: Build it the way Kiln does
+        env:
+          KILN_GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          XCODE_TOOLCHAIN="$(dirname "$(dirname "$(xcrun --find swift)")")"
+          export KILN_SWIFT_FRONTEND="$TOOLCHAIN/usr/bin/swift-frontend"
+          export KILN_SWIFT_RESOURCES="$TOOLCHAIN/usr/lib/swift"
+          export KILN_LLD="$LLD"
+          export KILN_PLUGIN_ARGS="-plugin-path $TOOLCHAIN/usr/lib/swift/host/plugins -in-process-plugin-server-path $TOOLCHAIN/usr/lib/swift/host/libSwiftInProcPluginServer.dylib -external-plugin-path $XCODE_TOOLCHAIN/usr/lib/swift/host/plugins#$XCODE_TOOLCHAIN/usr/bin/swift-plugin-server"
+          Toolchain/test/KilnCLI/.build/release/kiln-build "$RUNNER_TEMP/project" 2>&1 | tee "$RUNNER_TEMP/kiln-build.log"
+          exit ${PIPESTATUS[0]}
+
+      - name: Upload the log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kiln-build-log
+          path: ${{ runner.temp }}/kiln-build.log

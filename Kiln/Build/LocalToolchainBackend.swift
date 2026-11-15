@@ -24,6 +24,19 @@ struct LocalToolchainBackend: BuildBackend {
         kiln_toolchain_available() == 1 && toolchainURL != nil
     }
 
+    /// Where the SDK, resources and plug-ins are when Kiln's build system runs somewhere else than in
+    /// the app: the kiln-build tool uses it to build projects on a Mac in CI, with the same planner,
+    /// flags and caches as on the iPhone.
+    struct HostToolchain: Sendable {
+        var sdk: URL
+        var swiftResources: URL
+        var clangResources: URL
+        var builtins: URL
+        var pluginArguments: [String]
+    }
+
+    nonisolated(unsafe) static var host: HostToolchain?
+
     /// Precompiled SDK modules; reused between builds, so only the first build is slow.
     static var moduleCacheURL: URL {
         let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
@@ -31,12 +44,27 @@ struct LocalToolchainBackend: BuildBackend {
     }
 
     func build(_ request: BuildRequest, log: @escaping @Sendable (String) -> Void) async throws -> BuildProduct {
-        guard kiln_toolchain_available() == 1, let toolchain = Self.toolchainURL else {
-            throw BuildError.backendUnavailable("This build of Kiln does not include the on-device compiler.")
+        let sdk: URL
+        let resources: URL
+        let clangResources: URL
+        let builtins: URL
+        let pluginArguments: [String]
+        if let host = Self.host {
+            sdk = host.sdk
+            resources = host.swiftResources
+            clangResources = host.clangResources
+            builtins = host.builtins
+            pluginArguments = host.pluginArguments
+        } else {
+            guard kiln_toolchain_available() == 1, let toolchain = Self.toolchainURL else {
+                throw BuildError.backendUnavailable("This build of Kiln does not include the on-device compiler.")
+            }
+            sdk = try SDKInstaller.sdk(in: toolchain, log: log)
+            resources = toolchain.appendingPathComponent("resources")
+            clangResources = resources.appendingPathComponent("clang")
+            builtins = toolchain.appendingPathComponent("lib/libclang_rt.ios.a")
+            pluginArguments = Self.macroPluginArguments()
         }
-        let sdk = try SDKInstaller.sdk(in: toolchain, log: log)
-        let resources = toolchain.appendingPathComponent("resources")
-        let builtins = toolchain.appendingPathComponent("lib/libclang_rt.ios.a")
         let fileManager = FileManager.default
 
         // Write the prepared sources where the compiler can read them.
@@ -75,11 +103,11 @@ struct LocalToolchainBackend: BuildBackend {
             "-parse-as-library",
             "-Onone",
             "-module-cache-path", Self.moduleCacheURL.path,
-        ] + Self.macroPluginArguments()
+        ] + pluginArguments
         let clangCommon = [
             "-target", Self.target,
             "-isysroot", sdk.path,
-            "-resource-dir", resources.appendingPathComponent("clang").path,
+            "-resource-dir", clangResources.path,
             "-O2",
         ]
         let sdkVersion = Self.sdkVersion(at: sdk) ?? "26.0"
@@ -200,7 +228,9 @@ struct LocalToolchainBackend: BuildBackend {
                 }
                 // The module's real name includes a hash of its sources and settings, so an unchanged
                 // module is reused, and a changed one never clashes with the copy that is still loaded.
-                let packageFlags = module.packageName.map { ["-package-name", $0] } ?? []
+                let packageFlags = (module.packageName.map { ["-package-name", $0] } ?? [])
+                    + (Self.importsBuiltin(moduleSources) && !module.swiftFlags.contains("BuiltinModule")
+                       ? ["-enable-experimental-feature", "BuiltinModule"] : [])
                 let settings = clangImportFlags + moduleSearchFlags + packageFlags + module.swiftFlags + module.swiftDefines.flatMap { ["-D", $0] }
                 let key = cache.key([cache.fingerprint(moduleSources), module.name] + swiftCommon + settings)
                 // The module keeps its name (its code and its clients write `MLX.…`); the ABI name, used in
@@ -409,6 +439,15 @@ struct LocalToolchainBackend: BuildBackend {
             try source.write(to: accessor, atomically: true, encoding: .utf8)
         }
         return accessor
+    }
+
+    /// True when a source file has `import Builtin` (swift-collections, swift-numerics), which needs the
+    /// BuiltinModule feature that their manifests enable in ways Kiln cannot always read.
+    static func importsBuiltin(_ files: [URL]) -> Bool {
+        files.contains { file in
+            guard let text = try? String(contentsOf: file, encoding: .utf8) else { return false }
+            return text.range(of: #"(?m)^\s*(@\w+\s+)*import\s+Builtin\b"#, options: .regularExpression) != nil
+        }
     }
 
     /// module.modulemap files in a headers folder or one level below it (as in many .xcframeworks).
