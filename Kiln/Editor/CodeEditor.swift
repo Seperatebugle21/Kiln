@@ -1,17 +1,22 @@
 import SwiftUI
 import UIKit
 
-/// A code editor backed by UITextView: monospaced, no autocorrection, Swift colouring and auto-indent.
+/// A code editor backed by UITextView: monospaced, no autocorrection, Swift colouring, auto-indent,
+/// small line numbers and marked error lines.
 struct CodeEditor: UIViewRepresentable {
     @Binding var text: String
     var highlightsSwift: Bool
+    /// 1-based line → error message.
+    var errorLines: [Int: String] = [:]
+    /// Set to a line number to scroll there and put the cursor on it.
+    @Binding var focusLine: Int?
 
     func makeCoordinator() -> Coordinator {
         Coordinator(parent: self)
     }
 
-    func makeUIView(context: Context) -> UITextView {
-        let textView = UITextView()
+    func makeUIView(context: Context) -> LineNumberTextView {
+        let textView = LineNumberTextView()
         textView.font = SwiftHighlighter.font
         textView.backgroundColor = .systemBackground
         textView.autocorrectionType = .no
@@ -22,26 +27,36 @@ struct CodeEditor: UIViewRepresentable {
         textView.smartInsertDeleteType = .no
         textView.keyboardDismissMode = .interactive
         textView.alwaysBounceVertical = true
-        textView.textContainerInset = UIEdgeInsets(top: 12, left: 8, bottom: 40, right: 8)
+        textView.textContainerInset = UIEdgeInsets(top: 12, left: LineNumberTextView.gutterWidth + 6, bottom: 40, right: 8)
         textView.delegate = context.coordinator
         textView.inputAccessoryView = context.coordinator.makeAccessoryBar()
         textView.text = text
+        textView.textDidChange()
+        textView.errorLines = errorLines
         context.coordinator.textView = textView
         context.coordinator.applyHighlighting()
         return textView
     }
 
-    func updateUIView(_ textView: UITextView, context: Context) {
+    func updateUIView(_ textView: LineNumberTextView, context: Context) {
         context.coordinator.parent = self
         if textView.text != text {
             textView.text = text
+            textView.textDidChange()
             context.coordinator.applyHighlighting()
+        }
+        textView.errorLines = errorLines
+        if let line = focusLine {
+            DispatchQueue.main.async {
+                context.coordinator.focus(line: line)
+                focusLine = nil
+            }
         }
     }
 
     final class Coordinator: NSObject, UITextViewDelegate {
         var parent: CodeEditor
-        weak var textView: UITextView?
+        weak var textView: LineNumberTextView?
         private let highlighter = SwiftHighlighter()
 
         init(parent: CodeEditor) {
@@ -50,7 +65,15 @@ struct CodeEditor: UIViewRepresentable {
 
         func textViewDidChange(_ textView: UITextView) {
             parent.text = textView.text
+            self.textView?.textDidChange()
             applyHighlighting()
+        }
+
+        func focus(line: Int) {
+            guard let textView, let range = textView.characterRange(ofLine: line) else { return }
+            textView.becomeFirstResponder()
+            textView.selectedRange = NSRange(location: range.location, length: 0)
+            textView.scrollRangeToVisible(range)
         }
 
         func applyHighlighting() {
