@@ -36,6 +36,8 @@ struct BuildRequest: Sendable {
 
 struct BuildProduct: Sendable {
     var dylib: URL
+    /// The app's own resources (strings, images, files), which Bundle.main falls back to while it runs.
+    var resourceBundle: URL? = nil
 }
 
 enum BuildError: LocalizedError {

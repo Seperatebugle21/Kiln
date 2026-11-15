@@ -302,8 +302,11 @@ struct LocalToolchainBackend: BuildBackend {
         }
 
         // 4. The app.
+        var appResourceBundle: URL?
         if let bundleName = request.plan.appBundleName {
-            sourcePaths.append(try resourceAccessor(name: bundleName, items: request.plan.appResources, in: cache.generated, log: log).path)
+            let accessor = try resourceAccessor(name: bundleName, items: request.plan.appResources, in: cache.generated, log: log)
+            sourcePaths.append(accessor.path)
+            appResourceBundle = try ResourceBundler.build(name: bundleName, items: request.plan.appResources).bundle
         }
         log("Compiling \(sourcePaths.count) app file(s)…")
         let appPackageFlags = request.plan.appPackageName.map { ["-package-name", $0] } ?? []
@@ -340,7 +343,7 @@ struct LocalToolchainBackend: BuildBackend {
         } else {
             log("No signing certificate in Settings: the app is ad-hoc signed, which iOS rejects unless code signing checks are bypassed.")
         }
-        return BuildProduct(dylib: dylib)
+        return BuildProduct(dylib: dylib, resourceBundle: appResourceBundle)
     }
 
     // MARK: Compiling

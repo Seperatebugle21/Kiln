@@ -28,6 +28,10 @@ enum AppRunner {
         let copy = runs.appendingPathComponent(UUID().uuidString + ".dylib")
         try FileManager.default.copyItem(at: product.dylib, to: copy)
 
+        // The app's strings, files and images, for code that looks them up in Bundle.main.
+        MainBundleFallback.install()
+        MainBundleFallback.bundle = product.resourceBundle.flatMap { Bundle(url: $0) }
+
         guard let handle = dlopen(copy.path, RTLD_NOW | RTLD_LOCAL) else {
             throw Failure.load(dlerror().map { String(cString: $0) } ?? "unknown error")
         }
@@ -96,7 +100,10 @@ struct RunnerView: View {
                 withAnimation { showsHint = false }
             }
         }
-        .onDisappear { console.stop() }
+        .onDisappear {
+            console.stop()
+            MainBundleFallback.bundle = nil
+        }
         .onChange(of: scenePhase) { _, phase in
             // Leaving Kiln and coming back opens the menu, so the app can be stopped or resumed.
             if phase == .background { wasInBackground = true }
