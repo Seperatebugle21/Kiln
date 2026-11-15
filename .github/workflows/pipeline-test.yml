@@ -1,0 +1,62 @@
+name: Pipeline Test
+
+# Runs Kiln's compile-and-link pipeline on a Mac with the open-source Swift toolchain from swift.org
+# (the same compiler sources as Kiln's iOS build): frontend-mode compile of a SwiftUI app against the
+# iPhoneOS SDK, then ld64.lld into a dylib exporting kiln_entry.
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - "claude/**"
+    paths:
+      - ".github/workflows/pipeline-test.yml"
+      - "Toolchain/test/**"
+
+jobs:
+  pipeline:
+    runs-on: macos-26
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install the swift.org toolchain
+        run: |
+          xcrun swift --version
+          MINOR=$(xcrun swift --version 2>&1 | sed -n 's/.*Swift version \([0-9]*\.[0-9]*\).*/\1/p' | head -1)
+          for v in "$MINOR.6" "$MINOR.5" "$MINOR.4" "$MINOR.3" "$MINOR.2" "$MINOR.1" "$MINOR"; do
+            URL="https://download.swift.org/swift-$v-release/xcode/swift-$v-RELEASE/swift-$v-RELEASE-osx.pkg"
+            if curl -sfIL "$URL" >/dev/null; then
+              echo "Using Swift $v: $URL"
+              curl -sfL "$URL" -o "$RUNNER_TEMP/swift.pkg"
+              break
+            fi
+          done
+          test -f "$RUNNER_TEMP/swift.pkg" || { echo "::error::No swift.org toolchain found for Swift $MINOR"; exit 1; }
+          sudo installer -pkg "$RUNNER_TEMP/swift.pkg" -target /
+          TOOLCHAIN=$(ls -d /Library/Developer/Toolchains/swift-*-RELEASE.xctoolchain | head -1)
+          echo "TOOLCHAIN=$TOOLCHAIN" >> "$GITHUB_ENV"
+          "$TOOLCHAIN/usr/bin/swift-frontend" --version
+
+      - name: Install lld
+        run: |
+          brew install lld
+          LLD="$(brew --prefix lld)/bin/ld64.lld"
+          "$LLD" --version
+          echo "LLD=$LLD" >> "$GITHUB_ENV"
+
+      - name: Compile and link HelloKiln for iOS
+        run: Toolchain/test/pipeline-test.sh "$TOOLCHAIN/usr/bin/swift-frontend" "$LLD" "$RUNNER_TEMP/pipeline"
+
+      - name: Upload result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pipeline-test
+          path: |
+            ${{ runner.temp }}/pipeline/HelloKiln.dylib
+            ${{ runner.temp }}/pipeline/HelloKiln.o
+          if-no-files-found: ignore
+          retention-days: 7
