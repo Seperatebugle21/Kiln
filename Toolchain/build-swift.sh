@@ -103,6 +103,12 @@ echo "::group::Build Swift compiler libraries for iOS"
 LIBRARIES=($(ninja -C "$WORK/swift" -t targets all | sed -n 's#^\(lib/lib[^:]*\.a\):.*#\1#p' | sort -u))
 echo "Building ${#LIBRARIES[@]} libraries"
 ninja -C "$WORK/swift" "${LIBRARIES[@]}"
+# Without the Swift-written parts, initializeSwiftModules() comes from a stub that CMake builds as an
+# object library (no .a), so archive it ourselves.
+ninja -C "$WORK/swift" swiftCompilerStub
+STUB_OBJECTS=($(find "$WORK/swift/SwiftCompilerSources" -path '*swiftCompilerStub.dir*' -name '*.o'))
+test ${#STUB_OBJECTS[@]} -gt 0 || { echo "swiftCompilerStub objects not found"; exit 1; }
+xcrun ar rcs "$WORK/swift/lib/libswiftCompilerStub.a" "${STUB_OBJECTS[@]}"
 echo "::endgroup::"
 
 echo "::group::Collect"
