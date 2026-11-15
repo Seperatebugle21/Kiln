@@ -89,11 +89,59 @@ struct LocalToolchainBackend: BuildBackend {
         var clangHeaderPaths: [String] = []
         /// `-module-alias Name=Name_k…` for the Swift package modules built so far.
         var moduleAliases: [String] = []
+        /// Static libraries, `-framework`/`-l` flags and run-path folders for the linker.
+        var libraries: [URL] = []
+        var linkFlags: [String] = request.plan.appLinkFlags
+        var frameworkFlags: [String] = []
+        let embeddedFrameworks = request.workDirectory.appendingPathComponent("Frameworks", isDirectory: true)
+        let identity = try SigningIdentityStore.load(appleCertificates: SigningIdentityStore.bundledAppleCertificates())
+
+        /// Makes a C module's headers importable from Swift and includable from C.
+        func exposeHeaders(_ headers: URL, moduleName: String) throws {
+            for map in Self.moduleMaps(in: headers) {
+                clangImportFlags += ["-Xcc", "-fmodule-map-file=\(map.path)"]
+            }
+            if Self.moduleMaps(in: headers).isEmpty {
+                let map = try Self.writeModuleMap(for: moduleName, headers: headers, in: modulesDirectory)
+                clangImportFlags += ["-Xcc", "-fmodule-map-file=\(map.path)"]
+            }
+            clangImportFlags += ["-Xcc", "-I", "-Xcc", headers.path]
+            clangHeaderPaths.append(headers.path)
+        }
 
         // 1. Package modules, in dependency order.
         for module in request.plan.modules {
             let started = Date()
+            linkFlags += module.linkFlags
             switch module.language {
+            case .binary:
+                // Prebuilt code (.xcframework slices), system libraries and header-only targets.
+                libraries += module.libraries
+                if let headers = module.publicHeaders {
+                    try exposeHeaders(headers, moduleName: module.name)
+                }
+                for framework in module.frameworks {
+                    let folder = framework.deletingLastPathComponent()
+                    let name = framework.deletingPathExtension().lastPathComponent
+                    clangImportFlags += ["-F", folder.path]
+                    clangHeaderPaths.append(framework.appendingPathComponent("Headers").path)
+                    frameworkFlags += ["-F", folder.path, "-framework", name]
+                    if Self.isDynamicLibrary(framework.appendingPathComponent(name)) {
+                        // A dynamic framework is loaded next to the app at run time and must be signed like it.
+                        let copy = embeddedFrameworks.appendingPathComponent(framework.lastPathComponent)
+                        try fileManager.createDirectory(at: embeddedFrameworks, withIntermediateDirectories: true)
+                        try? fileManager.removeItem(at: copy)
+                        try fileManager.copyItem(at: framework, to: copy)
+                        if let identity {
+                            let signer = MachOSigner(privateKey: identity.privateKey, certificates: identity.certificates, teamID: identity.teamID)
+                            try signer.sign(fileAt: copy.appendingPathComponent(name), identifier: name)
+                        }
+                    }
+                }
+                if !module.libraries.isEmpty || !module.frameworks.isEmpty {
+                    log("Using \(module.name) (prebuilt).")
+                }
+                continue
             case .clang:
                 log("Compiling \(module.name) (C, \(module.sources.count) file(s))…")
                 let headerFlags = (module.publicHeaders.map { [$0.path] } ?? []).flatMap { ["-I", $0] }
@@ -101,21 +149,24 @@ struct LocalToolchainBackend: BuildBackend {
                     + clangHeaderPaths.flatMap { ["-I", $0] }
                 for (index, source) in module.sources.enumerated() {
                     let output = objectsDirectory.appendingPathComponent("\(module.name)-\(index)-\(source.deletingPathExtension().lastPathComponent).o")
-                    try await compileC(source, to: output, flags: clangCommon + headerFlags + module.defines.flatMap { ["-D", $0] }, log: log)
+                    try await compileC(source, to: output, flags: clangCommon + headerFlags + module.defines.flatMap { ["-D", $0] } + module.cFlags,
+                                       cStandard: module.cStandard, cxxStandard: module.cxxStandard, log: log)
                     if ["cc", "cpp", "cxx", "mm"].contains(source.pathExtension.lowercased()) { usesCxx = true }
                     objects.append(output)
                 }
                 if let headers = module.publicHeaders {
-                    let map = try Self.writeModuleMap(for: module.name, headers: headers, in: modulesDirectory)
-                    clangImportFlags += ["-Xcc", "-fmodule-map-file=\(map.path)", "-Xcc", "-I", "-Xcc", headers.path]
-                    clangHeaderPaths.append(headers.path)
+                    try exposeHeaders(headers, moduleName: module.name)
                 }
             case .swift:
                 log("Compiling \(module.name) (Swift, \(module.sources.count) file(s))…")
                 let realName = module.name + buildTag
                 let output = objectsDirectory.appendingPathComponent("\(realName).o")
-                let arguments = ["swift-frontend", "-frontend", "-c"] + module.sources.map(\.path) + swiftCommon + clangImportFlags
-                    + moduleAliases
+                var moduleSources = module.sources.map(\.path)
+                if let bundleName = module.bundleName {
+                    moduleSources.append(try resourceAccessor(name: bundleName, items: module.resources, in: objectsDirectory, log: log).path)
+                }
+                let arguments = ["swift-frontend", "-frontend", "-c"] + moduleSources + swiftCommon + clangImportFlags
+                    + moduleAliases + module.swiftFlags
                     + module.swiftDefines.flatMap { ["-D", $0] }
                     + ["-module-name", realName,
                        "-emit-module-path", modulesDirectory.appendingPathComponent("\(realName).swiftmodule").path,
@@ -133,15 +184,20 @@ struct LocalToolchainBackend: BuildBackend {
             bridgingFlags = ["-import-objc-header", header.path, "-Xcc", "-I", "-Xcc", header.deletingLastPathComponent().path]
             for (index, source) in request.plan.appCSources.enumerated() {
                 let output = objectsDirectory.appendingPathComponent("app-\(index)-\(source.deletingPathExtension().lastPathComponent).o")
-                try await compileC(source, to: output, flags: clangCommon + ["-I", header.deletingLastPathComponent().path] + clangHeaderPaths.flatMap { ["-I", $0] }, log: log)
+                try await compileC(source, to: output, flags: clangCommon + ["-I", header.deletingLastPathComponent().path] + clangHeaderPaths.flatMap { ["-I", $0] },
+                                   cStandard: nil, cxxStandard: nil, log: log)
                 if ["cc", "cpp", "cxx", "mm"].contains(source.pathExtension.lowercased()) { usesCxx = true }
                 objects.append(output)
             }
         }
 
         // 3. The app.
+        if let bundleName = request.plan.appBundleName {
+            sourcePaths.append(try resourceAccessor(name: bundleName, items: request.plan.appResources, in: objectsDirectory, log: log).path)
+        }
         log("Compiling \(sourcePaths.count) app file(s)…")
-        let compileArguments = ["swift-frontend", "-frontend", "-c"] + sourcePaths + swiftCommon + clangImportFlags + moduleAliases + bridgingFlags + [
+        let compileArguments = ["swift-frontend", "-frontend", "-c"] + sourcePaths + swiftCommon + clangImportFlags + moduleAliases
+            + request.plan.appSwiftFlags + bridgingFlags + [
             "-module-name", moduleName,
             "-o", object.path,
         ]
@@ -162,7 +218,9 @@ struct LocalToolchainBackend: BuildBackend {
             "-lSystem",
             "-install_name", "@rpath/\(moduleName).dylib",
             "-adhoc_codesign",
-        ] + objects.map(\.path) + (usesCxx ? ["-lc++"] : []) + [
+        ] + objects.map(\.path) + libraries.map(\.path) + frameworkFlags + Self.uniqueLinkFlags(linkFlags)
+            + (fileManager.fileExists(atPath: embeddedFrameworks.path) ? ["-rpath", embeddedFrameworks.path] : [])
+            + (usesCxx || !libraries.isEmpty ? ["-lc++"] : []) + [
             builtins.path,
             "-o", dylib.path,
         ]
@@ -180,7 +238,7 @@ struct LocalToolchainBackend: BuildBackend {
         }
 
         // 3. Sign with the certificate from Settings, so iOS accepts it without JIT.
-        if let identity = try SigningIdentityStore.load(appleCertificates: SigningIdentityStore.bundledAppleCertificates()) {
+        if let identity {
             log("Signing with \(identity.name) (\(identity.teamID))…")
             let signer = MachOSigner(privateKey: identity.privateKey, certificates: identity.certificates, teamID: identity.teamID)
             try signer.sign(fileAt: dylib, identifier: "app.kiln.build.\(moduleName)")
@@ -208,13 +266,21 @@ struct LocalToolchainBackend: BuildBackend {
         }
     }
 
-    private func compileC(_ source: URL, to output: URL, flags: [String], log: @Sendable (String) -> Void) async throws {
+    private func compileC(_ source: URL, to output: URL, flags: [String], cStandard: String?, cxxStandard: String?,
+                          log: @Sendable (String) -> Void) async throws {
         var arguments = ["clang", "-c", source.path, "-o", output.path] + flags
-        switch source.pathExtension.lowercased() {
-        case "m": arguments += ["-fobjc-arc"]
-        case "mm": arguments += ["-fobjc-arc", "-std=gnu++17"]
-        case "cc", "cpp", "cxx": arguments += ["-std=gnu++17"]
-        default: arguments += ["-std=gnu11"]
+        let cxx = "-std=\(cxxStandard ?? "gnu++17")"
+        switch source.pathExtension {
+        case "m": arguments += ["-fobjc-arc", "-std=\(cStandard ?? "gnu11")"]
+        case "mm": arguments += ["-fobjc-arc", cxx]
+        case "cc", "cpp", "cxx", "CC", "CPP": arguments += [cxx]
+        case "s", "S": break
+        default: arguments += ["-std=\(cStandard ?? "gnu11")"]
+        }
+        // A package's own -std= in unsafeFlags wins over the default.
+        if flags.contains(where: { $0.hasPrefix("-std=") }), let index = arguments.lastIndex(where: { $0.hasPrefix("-std=") }),
+           index >= arguments.count - 2 {
+            arguments.remove(at: index)
         }
         let finalArguments = arguments
         let (status, text) = await Self.runOnLargeStack {
@@ -253,6 +319,53 @@ struct LocalToolchainBackend: BuildBackend {
     }
 
     // MARK: Helpers
+
+    /// Builds a resource bundle and writes the `Bundle.module` accessor for it.
+    private func resourceAccessor(name: String, items: [ResourceItem], in directory: URL, log: @Sendable (String) -> Void) throws -> URL {
+        log("Copying resources for \(name)…")
+        let result = try ResourceBundler.build(name: name, items: items)
+        result.warnings.forEach(log)
+        let accessor = directory.appendingPathComponent("\(name)_resource_bundle_accessor.swift")
+        try ResourceBundler.accessorSource(bundle: result.bundle).write(to: accessor, atomically: true, encoding: .utf8)
+        return accessor
+    }
+
+    /// module.modulemap files in a headers folder or one level below it (as in many .xcframeworks).
+    static func moduleMaps(in headers: URL) -> [URL] {
+        let fileManager = FileManager.default
+        var maps: [URL] = []
+        let direct = headers.appendingPathComponent("module.modulemap")
+        if fileManager.fileExists(atPath: direct.path) { maps.append(direct) }
+        for child in (try? fileManager.contentsOfDirectory(at: headers, includingPropertiesForKeys: nil)) ?? [] {
+            let map = child.appendingPathComponent("module.modulemap")
+            if fileManager.fileExists(atPath: map.path) { maps.append(map) }
+        }
+        return maps
+    }
+
+    /// True for a Mach-O dynamic library (as opposed to a static archive).
+    static func isDynamicLibrary(_ url: URL) -> Bool {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return false }
+        defer { try? handle.close() }
+        guard let header = try? handle.read(upToCount: 16), header.count == 16 else { return false }
+        let bytes = [UInt8](header)
+        let magic = UInt32(bytes[0]) | UInt32(bytes[1]) << 8 | UInt32(bytes[2]) << 16 | UInt32(bytes[3]) << 24
+        let fileType = UInt32(bytes[12]) | UInt32(bytes[13]) << 8 | UInt32(bytes[14]) << 16 | UInt32(bytes[15]) << 24
+        return magic == 0xFEED_FACF && fileType == 6
+    }
+
+    /// Linker flags without repeats (`-framework X` counts as one flag).
+    static func uniqueLinkFlags(_ flags: [String]) -> [String] {
+        var seen = Set<String>()
+        var result: [String] = []
+        var index = 0
+        while index < flags.count {
+            let item = flags[index] == "-framework" && index + 1 < flags.count ? [flags[index], flags[index + 1]] : [flags[index]]
+            index += item.count
+            if seen.insert(item.joined(separator: " ")).inserted { result += item }
+        }
+        return result
+    }
 
     /// Macros run as plug-ins. iOS cannot start the usual plug-in processes, so the compiler loads
     /// them in-process through libSwiftInProcPluginServer; Kiln embeds both in its Frameworks folder

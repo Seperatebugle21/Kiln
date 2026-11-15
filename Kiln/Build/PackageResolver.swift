@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 /// A package checked out on disk, with its manifest.
@@ -16,6 +17,7 @@ final class PackageResolver: @unchecked Sendable {
         case noMatchingVersion(String, String)
         case download(String, Int)
         case missingManifest(String)
+        case checksum(String)
 
         var errorDescription: String? {
             switch self {
@@ -27,11 +29,17 @@ final class PackageResolver: @unchecked Sendable {
                 return "\(package): download failed (HTTP \(status))."
             case .missingManifest(let path):
                 return "No Package.swift in \(path)."
+            case .checksum(let name):
+                return "\(name): the downloaded file does not match the checksum in Package.swift."
             }
         }
     }
 
     private let pins: [String: String]
+    /// Versions chosen from tags in earlier builds of this project, so later builds need no
+    /// GitHub API calls (which are rate-limited without a token) and stay on the same versions.
+    private var remembered: [String: String]
+    private let rememberedFile: URL
     private let token: String?
     private let log: @Sendable (String) -> Void
 
@@ -42,6 +50,9 @@ final class PackageResolver: @unchecked Sendable {
 
     init(projectRoot: URL, token: String?, log: @escaping @Sendable (String) -> Void) {
         self.pins = Self.readPins(in: projectRoot)
+        let key = String(projectRoot.standardizedFileURL.path.hashValueStable, radix: 16)
+        rememberedFile = Self.cacheRoot.appendingPathComponent("resolved-\(key).json")
+        remembered = (try? JSONDecoder().decode([String: String].self, from: Data(contentsOf: rememberedFile))) ?? [:]
         self.token = token
         self.log = log
     }
@@ -78,6 +89,16 @@ final class PackageResolver: @unchecked Sendable {
 
     private func revision(for dependency: PackageManifest.Dependency, owner: String, repo: String) async throws -> String {
         if let pinned = pins[dependency.identity] { return pinned }
+        let rememberedKey = "\(dependency.identity) \(dependency.requirement)"
+        if let version = remembered[rememberedKey] { return version }
+        let version = try await newestRevision(for: dependency, owner: owner, repo: repo)
+        remembered[rememberedKey] = version
+        try? FileManager.default.createDirectory(at: Self.cacheRoot, withIntermediateDirectories: true)
+        try? JSONEncoder().encode(remembered).write(to: rememberedFile)
+        return version
+    }
+
+    private func newestRevision(for dependency: PackageManifest.Dependency, owner: String, repo: String) async throws -> String {
         switch dependency.requirement {
         case .revision(let revision), .branch(let revision):
             return revision
@@ -161,6 +182,58 @@ final class PackageResolver: @unchecked Sendable {
         try FileManager.default.moveItem(at: staging, to: root)
     }
 
+    // MARK: Binary targets
+
+    /// Downloads a binary target's zip (an .xcframework), checks its checksum and unpacks it.
+    /// Kept in the cache by checksum, so it is downloaded once.
+    func downloadBinary(_ urlString: String, checksum: String?, name: String) async throws -> URL {
+        let key = checksum ?? String(urlString.hashValueStable, radix: 16)
+        let folder = Self.cacheRoot.appendingPathComponent("binaries", isDirectory: true)
+            .appendingPathComponent("\(name)-\(key.prefix(16))", isDirectory: true)
+        if FileManager.default.fileExists(atPath: folder.appendingPathComponent(".complete").path) { return folder }
+        guard let url = URL(string: urlString) else { throw Failure.download(name, 0) }
+        log("Downloading \(name) (\(url.lastPathComponent))…")
+        var request = URLRequest(url: url)
+        if let token, !token.isEmpty, url.host == "api.github.com" {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            request.setValue("application/octet-stream", forHTTPHeaderField: "Accept")
+        }
+        let (file, response) = try await URLSession.shared.download(for: request)
+        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+        guard status == 200 else { throw Failure.download(name, status) }
+        if let checksum, !checksum.isEmpty {
+            guard try Self.sha256(of: file) == checksum.lowercased() else { throw Failure.checksum(name) }
+        }
+        try? FileManager.default.removeItem(at: folder)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try ZipArchive.extract(file, to: folder)
+        try? FileManager.default.removeItem(at: file)
+        FileManager.default.createFile(atPath: folder.appendingPathComponent(".complete").path, contents: Data())
+        return folder
+    }
+
+    /// A zipped binary target inside a package (`path: "Foo.xcframework.zip"`).
+    func unpackBinary(at zip: URL, name: String) async throws -> URL {
+        let folder = Self.cacheRoot.appendingPathComponent("binaries", isDirectory: true)
+            .appendingPathComponent("\(name)-\(String(zip.path.hashValueStable, radix: 16))", isDirectory: true)
+        if FileManager.default.fileExists(atPath: folder.appendingPathComponent(".complete").path) { return folder }
+        try? FileManager.default.removeItem(at: folder)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try ZipArchive.extract(zip, to: folder)
+        FileManager.default.createFile(atPath: folder.appendingPathComponent(".complete").path, contents: Data())
+        return folder
+    }
+
+    static func sha256(of file: URL) throws -> String {
+        let handle = try FileHandle(forReadingFrom: file)
+        defer { try? handle.close() }
+        var hasher = SHA256()
+        while let chunk = try handle.read(upToCount: 1 << 20), !chunk.isEmpty {
+            hasher.update(data: chunk)
+        }
+        return hasher.finalize().map { String(format: "%02x", $0) }.joined()
+    }
+
     static func gitHubRepository(_ url: String) -> (owner: String, repo: String)? {
         var value = url
         for prefix in ["https://", "http://", "git@", "ssh://git@"] where value.hasPrefix(prefix) {
@@ -205,5 +278,17 @@ final class PackageResolver: @unchecked Sendable {
             }
         }
         return pins
+    }
+}
+
+extension String {
+    /// A hash that stays the same between launches (Swift's `hashValue` is randomly seeded).
+    var hashValueStable: UInt64 {
+        var hash: UInt64 = 0xcbf2_9ce4_8422_2325
+        for byte in utf8 {
+            hash ^= UInt64(byte)
+            hash = hash &* 0x100_0000_01b3
+        }
+        return hash
     }
 }

@@ -3,7 +3,8 @@ import Foundation
 /// One module to compile before the app: a Swift or C-family package target.
 struct BuildModule: Sendable {
     enum Language: Sendable {
-        case swift, clang
+        /// Swift sources; C-family sources; or a prebuilt library from a binary target (.xcframework).
+        case swift, clang, binary
     }
 
     var name: String
@@ -15,6 +16,24 @@ struct BuildModule: Sendable {
     var defines: [String]
     var swiftDefines: [String]
     var dependencies: [String]
+    var swiftFlags: [String] = []
+    var cFlags: [String] = []
+    var linkFlags: [String] = []
+    var cStandard: String?
+    var cxxStandard: String?
+    /// Files for the module's resource bundle (`Bundle.module`), and the bundle's name.
+    var resources: [ResourceItem] = []
+    var bundleName: String?
+    /// Binary targets: static libraries (.a) and frameworks to link.
+    var libraries: [URL] = []
+    var frameworks: [URL] = []
+}
+
+struct ResourceItem: Sendable {
+    var url: URL
+    /// `.copy` keeps a folder as it is; `.process` copies the files, converting what iOS cannot
+    /// read at run time (string catalogs, asset catalogs).
+    var copy: Bool
 }
 
 /// What to compile for a project: package modules in dependency order, then the app.
@@ -25,13 +44,18 @@ struct BuildPlan: Sendable {
     var appCSources: [URL] = []
     var bridgingHeader: URL?
     var warnings: [String] = []
+    /// Settings and resources of the app target itself (a Swift package's executable target).
+    var appSwiftFlags: [String] = []
+    var appLinkFlags: [String] = []
+    var appResources: [ResourceItem] = []
+    var appBundleName: String?
 }
 
 /// Reads a project (Swift package, Xcode project, XcodeGen project or plain folder) into a BuildPlan,
 /// resolving and downloading package dependencies.
 enum BuildPlanner {
     static let swiftExtensions: Set<String> = ["swift"]
-    static let clangExtensions: Set<String> = ["c", "m", "mm", "cc", "cpp", "cxx"]
+    static let clangExtensions: Set<String> = ["c", "m", "mm", "cc", "cpp", "cxx", "s"]
     /// A folder that only wraps one Swift Playgrounds app (a repo with `MyApp.swiftpm/` in it)
     /// builds that app.
     static func packageRoot(in folder: URL) -> URL {
@@ -67,6 +91,10 @@ enum BuildPlanner {
             let directory = targetDirectory(app, in: root)
             let otherTargets = manifest.targets.filter { $0.name != app.name }.map { targetDirectory($0, in: root) }
             plan.appSources = files(in: [directory], extensions: swiftExtensions, excluding: excluded(app, in: directory) + otherTargets)
+            plan.appSwiftFlags = app.swiftFlags + app.swiftDefines.flatMap { ["-D", $0] }
+            plan.appLinkFlags = app.linkFlags
+            plan.appResources = resourceItems(app, in: directory)
+            if !plan.appResources.isEmpty { plan.appBundleName = "\(manifest.name)_\(app.name)" }
             appRequirements = app.dependencies
             directDependencies = manifest.dependencies
         } else {
@@ -131,14 +159,30 @@ enum BuildPlanner {
             case .regular, .executable:
                 break
             case .binary:
-                plan.warnings.append("\(target.name): binary targets (.xcframework) are not supported yet; skipped.")
+                do {
+                    plan.modules.append(try await binaryModule(for: target, in: package, resolver: resolver))
+                } catch {
+                    plan.warnings.append("\(target.name): \(error.localizedDescription)")
+                }
                 continue
-            case .macro, .plugin, .test, .system:
+            case .system:
+                // A system library (`module.modulemap` for a library the SDK provides).
+                let directory = targetDirectory(target, in: package.root)
+                plan.modules.append(BuildModule(name: target.name, language: .binary, sources: [], publicHeaders: directory,
+                                                headerSearchPaths: [], defines: [], swiftDefines: [], dependencies: []))
+                continue
+            case .macro, .plugin, .test:
                 plan.warnings.append("\(target.name): \(target.kind) targets are not supported; skipped.")
                 continue
             }
-            if let module = module(for: target, in: package) {
+            if var module = module(for: target, in: package) {
+                module.cStandard = package.manifest.cStandard
+                module.cxxStandard = package.manifest.cxxStandard
                 plan.modules.append(module)
+                let metal = files(in: [targetDirectory(target, in: package.root)], extensions: ["metal"])
+                if !metal.isEmpty {
+                    plan.warnings.append("\(target.name): Metal shaders (\(metal.count) .metal file(s)) cannot be compiled on iOS yet; GPU code in it will fail at run time.")
+                }
             } else {
                 plan.warnings.append("\(target.name): no sources found; skipped.")
             }
@@ -215,13 +259,27 @@ enum BuildPlanner {
             case .byName(let name), .target(let name), .product(let name, _): return name
             }
         }
+        let resources = resourceItems(target, in: directory)
         if !swiftFiles.isEmpty {
-            return BuildModule(name: target.name, language: .swift, sources: swiftFiles, publicHeaders: nil,
-                               headerSearchPaths: [], defines: [], swiftDefines: target.swiftDefines, dependencies: dependencies)
+            var module = BuildModule(name: target.name, language: .swift, sources: swiftFiles, publicHeaders: nil,
+                                     headerSearchPaths: [], defines: [], swiftDefines: target.swiftDefines, dependencies: dependencies)
+            module.swiftFlags = target.swiftFlags
+            module.linkFlags = target.linkFlags
+            module.resources = resources
+            if !resources.isEmpty { module.bundleName = "\(package.manifest.name)_\(target.name)" }
+            return module
         }
-        guard !clangFiles.isEmpty else { return nil }
         let headers = directory.appendingPathComponent(target.publicHeadersPath ?? "include")
-        return BuildModule(
+        guard !clangFiles.isEmpty else {
+            // A target with only headers, or only linker settings (like Python-iOS's LinkPython).
+            if target.linkFlags.isEmpty && !FileManager.default.fileExists(atPath: headers.path) { return nil }
+            var module = BuildModule(name: target.name, language: .binary, sources: [],
+                                     publicHeaders: FileManager.default.fileExists(atPath: headers.path) ? headers : nil,
+                                     headerSearchPaths: [], defines: [], swiftDefines: [], dependencies: dependencies)
+            module.linkFlags = target.linkFlags
+            return module
+        }
+        var module = BuildModule(
             name: target.name,
             language: .clang,
             sources: clangFiles,
@@ -231,6 +289,84 @@ enum BuildPlanner {
             swiftDefines: [],
             dependencies: dependencies
         )
+        module.cFlags = target.cFlags
+        module.linkFlags = target.linkFlags
+        return module
+    }
+
+    private static func resourceItems(_ target: PackageManifest.Target, in directory: URL) -> [ResourceItem] {
+        target.resources.compactMap { resource in
+            let url = directory.appendingPathComponent(resource.path).standardizedFileURL
+            guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+            return ResourceItem(url: url, copy: resource.rule == .copy)
+        }
+    }
+
+    // MARK: Binary targets
+
+    enum BinaryError: LocalizedError {
+        case noArtifact
+        case noSlice(String)
+
+        var errorDescription: String? {
+            switch self {
+            case .noArtifact: return "the binary target has no path or url."
+            case .noSlice(let name): return "\(name) has no library for iOS devices (arm64)."
+            }
+        }
+    }
+
+    /// A binary target's .xcframework (local, or downloaded and unzipped), reduced to its iOS device slice.
+    private static func binaryModule(for target: PackageManifest.Target, in package: ResolvedPackage, resolver: PackageResolver) async throws -> BuildModule {
+        var artifact: URL
+        if let path = target.binaryPath {
+            artifact = package.root.appendingPathComponent(path).standardizedFileURL
+            if artifact.pathExtension == "zip" {
+                artifact = try await resolver.unpackBinary(at: artifact, name: target.name)
+            }
+        } else if let url = target.binaryURL {
+            artifact = try await resolver.downloadBinary(url, checksum: target.checksum, name: target.name)
+        } else {
+            throw BinaryError.noArtifact
+        }
+        if artifact.pathExtension != "xcframework" {
+            // Unzipped folders hold the .xcframework (or a bare .framework).
+            let found = (try? FileManager.default.contentsOfDirectory(at: artifact, includingPropertiesForKeys: nil)) ?? []
+            if let xcframework = found.first(where: { $0.pathExtension == "xcframework" }) {
+                artifact = xcframework
+            } else if let framework = found.first(where: { $0.pathExtension == "framework" }) {
+                var module = BuildModule(name: target.name, language: .binary, sources: [], publicHeaders: nil,
+                                         headerSearchPaths: [], defines: [], swiftDefines: [], dependencies: [])
+                module.frameworks = [framework]
+                return module
+            }
+        }
+
+        guard let data = try? Data(contentsOf: artifact.appendingPathComponent("Info.plist")),
+              let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+              let libraries = plist["AvailableLibraries"] as? [[String: Any]],
+              let slice = libraries.first(where: { library in
+                  library["SupportedPlatform"] as? String == "ios"
+                      && library["SupportedPlatformVariant"] == nil
+                      && ((library["SupportedArchitectures"] as? [String]) ?? []).contains("arm64")
+              }),
+              let identifier = slice["LibraryIdentifier"] as? String,
+              let libraryPath = slice["LibraryPath"] as? String
+        else { throw BinaryError.noSlice(artifact.lastPathComponent) }
+
+        let folder = artifact.appendingPathComponent(identifier, isDirectory: true)
+        let library = folder.appendingPathComponent(libraryPath)
+        var module = BuildModule(name: target.name, language: .binary, sources: [], publicHeaders: nil,
+                                 headerSearchPaths: [], defines: [], swiftDefines: [], dependencies: [])
+        if library.pathExtension == "framework" {
+            module.frameworks = [library]
+        } else {
+            module.libraries = [library]
+            if let headers = slice["HeadersPath"] as? String {
+                module.publicHeaders = folder.appendingPathComponent(headers, isDirectory: true)
+            }
+        }
+        return module
     }
 
     private static func targetDirectory(_ target: PackageManifest.Target, in root: URL) -> URL {

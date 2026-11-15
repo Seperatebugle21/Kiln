@@ -67,10 +67,11 @@ enum AssistantTools {
     - They are SwiftUI apps for iOS 26. Write modern Swift and SwiftUI (Observation, NavigationStack, async/await).
     - Kiln runs an app by removing @main from the App struct and showing the content of its WindowGroup in a \
     hosting controller, so the app needs a `@main struct …: App` with a `WindowGroup { … }`. App delegate adaptors are not supported.
-    - Kiln builds the app's Swift files, Swift package dependencies (local, or from GitHub), C/C++/Objective-C \
-    package targets and app sources exposed through a bridging header. Not yet supported: binary (.xcframework) \
-    targets, package resources, asset catalogs, and Apple's closed-source macros other than #Preview \
-    (for example SwiftData's @Model); @Observable works.
+    - Kiln builds the app's Swift files, Swift package dependencies (local, or from GitHub), C/C++/Objective-C/assembly \
+    package targets, binary targets (.xcframework, static or dynamic), package resources (Bundle.module, with string \
+    catalogs and asset-catalog images converted) and app sources exposed through a bridging header. \
+    Not yet supported: Metal shaders, third-party macro packages, colors and data in asset catalogs, assets in the \
+    app's main bundle, and Apple's closed-source macros other than #Preview (for example SwiftData's @Model); @Observable works.
 
     How to work:
     - Read a file before you edit it, and keep edits small and focused with edit_file.
