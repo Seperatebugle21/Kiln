@@ -93,7 +93,9 @@ final class LineNumberTextView: UITextView {
     /// (in the text view's coordinates).
     fileprivate func forEachLineStart(in rect: CGRect, _ body: (Int, CGRect) -> Void) {
         let inset = textContainerInset
-        let visible = rect.offsetBy(dx: -inset.left, dy: -inset.top)
+        // Only the vertical extent matters: the gutter itself lies left of the text, so ask for the
+        // lines across the whole width of the text container.
+        let visible = CGRect(x: 0, y: rect.minY - inset.top, width: max(textContainer.size.width, 1), height: rect.height)
         let glyphs = layoutManager.glyphRange(forBoundingRect: visible, in: textContainer)
         let text = self.text as NSString? ?? ""
         var found: [(Int, CGRect)] = []
