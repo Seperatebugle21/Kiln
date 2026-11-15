@@ -34,6 +34,17 @@ COMMON=(
   "${LAUNCHER[@]}"
 )
 
+echo "::group::Patch lld"
+# Swift's LLVM fork disables linking for Apple platforms in lld ("This version of lld does not
+# support linking for platform iOS") by failing before the upstream platform check. Kiln links its
+# own iOS objects with lld, so drop that early error and keep the upstream check.
+INPUT_FILES="$SRC/lld/MachO/InputFiles.cpp"
+if grep -q "Swift LLVM fork downstream change start" "$INPUT_FILES"; then
+  perl -0pi -e 's|// Swift LLVM fork downstream change start.*?// Swift LLVM fork downstream change end|// Kiln: Swift fork restriction removed; the upstream platform check below applies.|s' "$INPUT_FILES"
+  grep -n "Kiln: Swift fork restriction removed" "$INPUT_FILES"
+fi
+echo "::endgroup::"
+
 echo "::group::Host tablegen tools"
 # Cross-compiling needs tablegen tools that run on this Mac.
 cmake -S "$SRC/llvm" -B "$WORK/host" "${COMMON[@]}" -DLLVM_ENABLE_PROJECTS=clang
