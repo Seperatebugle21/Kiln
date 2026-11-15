@@ -39,6 +39,11 @@ START=$(date +%s)
 echo "Compiled in $(( $(date +%s) - START ))s"
 echo "::endgroup::"
 
+# Clang's runtime helpers (compiler-rt), e.g. __isPlatformVersionAtLeast for #available checks.
+# The clang driver adds this archive automatically; Kiln has to pass it itself.
+BUILTINS="$(xcrun --sdk iphoneos clang -print-resource-dir)/lib/darwin/libclang_rt.ios.a"
+ls -lh "$BUILTINS"
+
 echo "::group::Link"
 "$LLD" -dylib -arch arm64 \
   -platform_version ios 26.0 "$SDK_VERSION" \
@@ -47,6 +52,7 @@ echo "::group::Link"
   -install_name @rpath/HelloKiln.dylib \
   -lSystem \
   "$WORK/HelloKiln.o" \
+  "$BUILTINS" \
   -o "$WORK/HelloKiln.dylib"
 echo "::endgroup::"
 
