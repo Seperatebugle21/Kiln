@@ -5,6 +5,7 @@
 # The parts of the compiler written in Swift (the new optimizer passes and swift-syntax, which
 # macros need, even to read the iOS SDK's interfaces) are compiled for iOS with Xcode's swiftc
 # (BOOTSTRAPPING_MODE=HOSTTOOLS). swift-syntax is built as dylibs (_Compiler*.dylib) that Kiln embeds.
+# The regex literal parser comes from swift-experimental-string-processing, checked out next to swift.
 #
 # Usage: Toolchain/build-swift.sh <swift checkout> <swift-cmark checkout> <swift-syntax checkout> <llvm work dir> <work dir>
 set -euo pipefail
@@ -99,7 +100,8 @@ cmake -S "$SWIFT_SRC" -B "$WORK/swift" "${SWIFT_IOS[@]}" \
   -DSWIFT_ENABLE_SWIFT_IN_SWIFT=ON \
   -DBOOTSTRAPPING_MODE=HOSTTOOLS \
   -DSWIFT_BUILD_SWIFT_SYNTAX=ON \
-  -DSWIFT_PATH_TO_SWIFT_SYNTAX_SOURCE="$SYNTAX_SRC"
+  -DSWIFT_PATH_TO_SWIFT_SYNTAX_SOURCE="$SYNTAX_SRC" \
+  -DSWIFT_PATH_TO_STRING_PROCESSING_SOURCE="$(dirname "$SWIFT_SRC")/swift-experimental-string-processing"
 echo "::endgroup::"
 
 echo "::group::Build Swift compiler libraries for iOS"

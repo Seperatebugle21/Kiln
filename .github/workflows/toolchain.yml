@@ -100,11 +100,11 @@ jobs:
 
       # Stage 2: the Swift compiler.
 
-      - name: Fetch swift, swift-cmark and swift-syntax
+      - name: Fetch swift and its source dependencies
         run: |
           FULL="${{ steps.version.outputs.full }}"
           VERSION="${{ steps.version.outputs.version }}"
-          for repo in swift swift-cmark swift-syntax; do
+          for repo in swift swift-cmark swift-syntax swift-experimental-string-processing; do
             BRANCH=""
             for candidate in "$FULL" "$VERSION" "$VERSION.x" "$VERSION.0"; do
               if git ls-remote --exit-code --heads "https://github.com/swiftlang/$repo.git" "release/$candidate" >/dev/null; then
