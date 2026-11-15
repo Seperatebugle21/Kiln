@@ -69,6 +69,10 @@ jobs:
           "$LLD" --version
           echo "LLD=$LLD" >> "$GITHUB_ENV"
 
+      - name: Build swift-numerics like Kiln (with and without module aliases)
+        continue-on-error: true
+        run: Toolchain/test/numerics-test.sh "$TOOLCHAIN/usr/bin/swift-frontend" "$RUNNER_TEMP/numerics"
+
       - name: Compile and link HelloKiln for iOS
         run: Toolchain/test/pipeline-test.sh "$TOOLCHAIN/usr/bin/swift-frontend" "$LLD" "$RUNNER_TEMP/pipeline"
 
