@@ -49,34 +49,6 @@ do {
 }
 plan.warnings.forEach(log)
 log("Packages: \(plan.modules.map(\.name).joined(separator: ", "))")
-// How Kiln reads mlx-swift's manifest: every target's folder and excludes under "mlx".
-let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("KilnPackages/mlx-swift")
-for version in (try? FileManager.default.contentsOfDirectory(at: caches, includingPropertiesForKeys: nil)) ?? [] {
-    guard let manifest = try? PackageManifest.load(from: version) else { continue }
-    for target in manifest.targets {
-        let directory = BuildPlanner.targetDirectory(target, in: version)
-        let mlxExcludes = target.exclude.filter { $0 == "mlx" || $0.hasPrefix("mlx/mlx") || $0.hasSuffix("/") || $0.isEmpty }
-        log("  [manifest] \(target.name) kind=\(target.kind) dir=\(directory.path.dropFirst(version.path.count)) excludes=\(target.exclude.count) sources=\(target.sources ?? []) mlx-related=\(mlxExcludes)")
-    }
-}
-// What is on disk in mlx-swift's Cmlx/mlx (the mlx submodule), by extension and top folders.
-for version in (try? FileManager.default.contentsOfDirectory(at: caches, includingPropertiesForKeys: nil)) ?? [] {
-    let mlx = version.appendingPathComponent("Source/Cmlx/mlx")
-    var byExtension: [String: Int] = [:]
-    var folders = Set<String>()
-    var symlinks = 0
-    if let enumerator = FileManager.default.enumerator(at: mlx, includingPropertiesForKeys: [.isSymbolicLinkKey]) {
-        for case let url as URL in enumerator {
-            byExtension[url.pathExtension, default: 0] += 1
-            if (try? url.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) == true { symlinks += 1 }
-            let relative = url.path.dropFirst(mlx.path.count + 1).split(separator: "/")
-            if relative.count >= 2 { folders.insert(relative.prefix(2).joined(separator: "/")) }
-        }
-    }
-    log("  [disk] Cmlx/mlx: \(byExtension.sorted { $0.value > $1.value }.prefix(12)) symlinks=\(symlinks) folders=\(folders.sorted().prefix(30))")
-    let cpp = BuildPlanner.files(in: [mlx], extensions: BuildPlanner.clangExtensions)
-    log("  [disk] files() finds \(cpp.count) C-family files in Cmlx/mlx")
-}
 // Where each C module's sources come from, to spot missing folders.
 for module in plan.modules where module.language == .clang && module.sources.count > 5 {
     var folders: [String: Int] = [:]

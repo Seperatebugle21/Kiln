@@ -488,12 +488,15 @@ enum BuildPlanner {
             ) else { continue }
             for case let url as URL in enumerator {
                 let path = url.standardizedFileURL.path
+                let isDirectory = (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
                 if excludedPaths.contains(where: { path == $0 || path.hasPrefix($0 + "/") }) {
-                    enumerator.skipDescendants()
+                    // Only for folders: after a file, skipDescendants() skips the rest of the file's
+                    // own folder (an excluded mlx/README.md dropped all of mlx/mlx/*.cpp).
+                    if isDirectory { enumerator.skipDescendants() }
                     continue
                 }
                 let name = url.lastPathComponent
-                if (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true {
+                if isDirectory {
                     if skippedFolders.contains(name) || url.pathExtension == "xcodeproj" || (skipTests && name.hasSuffix("Tests")) {
                         enumerator.skipDescendants()
                     }
