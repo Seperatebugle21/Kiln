@@ -298,11 +298,13 @@ enum BuildPlanner {
             var isFolder: ObjCBool = false
             return FileManager.default.fileExists(atPath: sources.appendingPathComponent(module).path, isDirectory: &isFolder) && isFolder.boolValue
         }
-        return PackageManifest.Target(
+        var target = PackageManifest.Target(
             name: name, kind: .regular, dependencies: siblings.sorted().map { .byName($0) },
             path: "Sources/\(name)", exclude: [], sources: nil, publicHeadersPath: nil,
             headerSearchPaths: [], defines: [], swiftDefines: []
         )
+        target.swiftFlags = package.manifest.codeSwiftFlags
+        return target
     }
 
     private static func module(for target: PackageManifest.Target, in package: ResolvedPackage) -> BuildModule? {

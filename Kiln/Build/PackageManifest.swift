@@ -95,6 +95,9 @@ struct PackageManifest {
     /// `cxxLanguageStandard: .gnucxx20` → "gnu++20".
     var cxxStandard: String? = nil
     var cStandard: String? = nil
+    /// Feature flags found anywhere in the manifest (also in helper code), for targets Kiln infers
+    /// from the folder layout because the manifest builds them with code.
+    var codeSwiftFlags: [String] = []
 
     static func load(from packageRoot: URL) throws -> PackageManifest {
         let url = packageRoot.appendingPathComponent("Package.swift")
@@ -157,6 +160,8 @@ private final class ManifestReader {
             }
         }
 
+        manifest.codeSwiftFlags = settingsInCode()
+
         // `package.targets.append(...)`, `package.targets += [...]` and the like.
         for statement in tree.statements {
             if let call = statement.item.as(FunctionCallExprSyntax.self),
@@ -177,6 +182,40 @@ private final class ManifestReader {
             }
         }
         return manifest
+    }
+
+    /// Every `.enableExperimentalFeature("…")` / `.enableUpcomingFeature("…")` in the file, and
+    /// availability macros from a `let availabilityMacros = ["Name": "macOS …, iOS …"]` table.
+    private func settingsInCode() -> [String] {
+        let collector = CallCollector()
+        collector.walk(tree)
+        var flags: [String] = []
+        for node in collector.calls {
+            guard let parsed = call(ExprSyntax(node)), let value = string(parsed.arguments[""]) else { continue }
+            switch parsed.name {
+            case "enableExperimentalFeature": flags += ["-enable-experimental-feature", value]
+            case "enableUpcomingFeature": flags += ["-enable-upcoming-feature", value]
+            default: break
+            }
+        }
+        for (name, value) in constants.sorted(by: { $0.key < $1.key }) where name.lowercased().contains("availability") {
+            guard let dictionary = value.as(DictionaryExprSyntax.self),
+                  let elements = dictionary.content.as(DictionaryElementListSyntax.self) else { continue }
+            for element in elements {
+                if let key = string(element.key), let macro = string(element.value) {
+                    flags += ["-enable-experimental-feature", "AvailabilityMacro=\(key): \(macro)"]
+                }
+            }
+        }
+        // Keep the first occurrence of each flag pair.
+        var seen = Set<String>()
+        var unique: [String] = []
+        var index = 0
+        while index + 1 < flags.count {
+            if seen.insert(flags[index] + " " + flags[index + 1]).inserted { unique += [flags[index], flags[index + 1]] }
+            index += 2
+        }
+        return unique
     }
 
     private func add(_ items: [ExprSyntax], to list: String, in manifest: inout PackageManifest) {
@@ -514,6 +553,17 @@ private final class PackageCallFinder: SyntaxVisitor {
             call = node
             return .skipChildren
         }
+        return .visitChildren
+    }
+}
+
+private final class CallCollector: SyntaxVisitor {
+    var calls: [FunctionCallExprSyntax] = []
+
+    init() { super.init(viewMode: .sourceAccurate) }
+
+    override func visit(_ node: FunctionCallExprSyntax) -> SyntaxVisitorContinueKind {
+        calls.append(node)
         return .visitChildren
     }
 }
