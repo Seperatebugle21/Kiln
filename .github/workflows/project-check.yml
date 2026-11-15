@@ -80,11 +80,20 @@ jobs:
         run: |
           # …/XcodeDefault.xctoolchain (swift is in its usr/bin).
           XCODE_TOOLCHAIN="$(dirname "$(dirname "$(dirname "$(xcrun --find swift)")")")"
-          ls "$XCODE_TOOLCHAIN/usr/lib/swift/host/plugins" | head -40
+          # Apple's closed macros (PreviewsMacros, FoundationModelsMacros) are in the platform folder.
+          PLATFORM="$(xcrun --sdk iphoneos --show-sdk-platform-path)"
+          PLATFORM_PLUGINS=""
+          for dir in "$PLATFORM/Developer/usr/lib/swift/host/plugins" "$PLATFORM/Developer/usr/local/lib/swift/host/plugins" \
+                     "$(xcode-select -p)/usr/lib/swift/host/plugins" "$XCODE_TOOLCHAIN/usr/lib/swift/host/plugins"; do
+            if [ -d "$dir" ]; then
+              echo "== $dir"; ls "$dir"
+              PLATFORM_PLUGINS="$PLATFORM_PLUGINS -external-plugin-path $dir#$XCODE_TOOLCHAIN/usr/bin/swift-plugin-server"
+            fi
+          done
           export KILN_SWIFT_FRONTEND="$TOOLCHAIN/usr/bin/swift-frontend"
           export KILN_SWIFT_RESOURCES="$TOOLCHAIN/usr/lib/swift"
           export KILN_LLD="$LLD"
-          export KILN_PLUGIN_ARGS="-plugin-path $TOOLCHAIN/usr/lib/swift/host/plugins -in-process-plugin-server-path $TOOLCHAIN/usr/lib/swift/host/libSwiftInProcPluginServer.dylib -external-plugin-path $XCODE_TOOLCHAIN/usr/lib/swift/host/plugins#$XCODE_TOOLCHAIN/usr/bin/swift-plugin-server"
+          export KILN_PLUGIN_ARGS="-plugin-path $TOOLCHAIN/usr/lib/swift/host/plugins -in-process-plugin-server-path $TOOLCHAIN/usr/lib/swift/host/libSwiftInProcPluginServer.dylib $PLATFORM_PLUGINS"
           Toolchain/test/KilnCLI/.build/release/kiln-build "$RUNNER_TEMP/project" 2>&1 | tee "$RUNNER_TEMP/kiln-build.log"
           exit ${PIPESTATUS[0]}
 
