@@ -263,7 +263,46 @@ enum BuildPlanner {
         for candidate in candidates {
             if let target = candidate.manifest.targets.first(where: { $0.name == name }) { return [(candidate, target)] }
         }
+        // Manifests that build their targets with code (swift-collections uses a struct and loops)
+        // cannot be read without running them. Fall back to SwiftPM's conventions: a folder
+        // Sources/<name> is the target, and its imports of sibling folders are its dependencies.
+        let ordered = candidates.sorted { lhs, rhs in
+            // Prefer the package the dependency names, then the requiring package itself.
+            (lhs.identity == package?.identity ? 0 : 1) < (rhs.identity == package?.identity ? 0 : 1)
+        }
+        for candidate in ordered {
+            if let target = conventionTarget(named: name, in: candidate) { return [(candidate, target)] }
+        }
         return []
+    }
+
+    /// A target inferred from the folder layout, for packages whose manifest Kiln cannot evaluate.
+    private static func conventionTarget(named name: String, in package: ResolvedPackage) -> PackageManifest.Target? {
+        let sources = package.root.appendingPathComponent("Sources", isDirectory: true)
+        let directory = sources.appendingPathComponent(name, isDirectory: true)
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: directory.path, isDirectory: &isDirectory), isDirectory.boolValue else { return nil }
+        var imported = Set<String>()
+        for file in files(in: [directory], extensions: swiftExtensions) {
+            guard let text = try? String(contentsOf: file, encoding: .utf8) else { continue }
+            for line in text.split(separator: "\n") {
+                let words = line.split(separator: " ").map(String.init)
+                guard let index = words.firstIndex(of: "import"), index + 1 < words.count,
+                      words[..<index].allSatisfy({ $0.hasPrefix("@") || ["public", "internal", "package", "private", "fileprivate"].contains($0) })
+                else { continue }
+                let module = String(words[index + 1].prefix { $0.isLetter || $0.isNumber || $0 == "_" })
+                if module != name { imported.insert(module) }
+            }
+        }
+        let siblings = imported.filter { module in
+            var isFolder: ObjCBool = false
+            return FileManager.default.fileExists(atPath: sources.appendingPathComponent(module).path, isDirectory: &isFolder) && isFolder.boolValue
+        }
+        return PackageManifest.Target(
+            name: name, kind: .regular, dependencies: siblings.sorted().map { .byName($0) },
+            path: "Sources/\(name)", exclude: [], sources: nil, publicHeadersPath: nil,
+            headerSearchPaths: [], defines: [], swiftDefines: []
+        )
     }
 
     private static func module(for target: PackageManifest.Target, in package: ResolvedPackage) -> BuildModule? {
