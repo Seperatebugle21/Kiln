@@ -28,6 +28,10 @@ du -sh "$OUT/SDK"
 echo "::endgroup::"
 
 cp -R "$SWIFT/resources" "$OUT/resources"
+# Clang finds SwiftShims through a module map in the resource directory itself that points into
+# shims/ (Swift's build installs shims/parent.modulemap there as module.modulemap).
+cp "$OUT/resources/shims/parent.modulemap" "$OUT/resources/module.modulemap"
+ls "$OUT/resources"
 cp "$(xcrun --sdk iphoneos clang -print-resource-dir)/lib/darwin/libclang_rt.ios.a" "$OUT/lib/"
 du -sh "$OUT"
 
